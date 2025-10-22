@@ -5,7 +5,7 @@ import type { Part, FunctionDeclaration } from "@google/genai";
 import type { Character, StyleReference, KnowledgeFile, ChatMessage, AgentFunctionCall, DialogueStyle, ContextPillItem } from '../types';
 import { cropImageBase64 } from "../utils/fileUtils";
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY as string });
+const getAI = () => new GoogleGenAI({ apiKey: "AIzaSyCGmkQ8O0ndB2WhDZIk_3R45t97v00d5SM" });
 
 const parseDataUrl = (dataUrl: string) => {
   const match = dataUrl.match(/^data:(.+);base64,(.+)$/);

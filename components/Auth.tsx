@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { GoogleIcon } from './icons/GoogleIcon';
 
@@ -12,8 +13,9 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
     };
 
     const handleGoogleLoginClick = () => {
-        // This is a simulated login. For this app, we use the guest login.
-        handleGuestLogin();
+        // This is a simulated login. It creates a unique "Google" user ID to store projects separately.
+        const uniqueGoogleId = `google-user-${Date.now().toString().slice(-6)}`;
+        onLogin(uniqueGoogleId);
     };
 
     return (
@@ -26,12 +28,13 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                     Your progress will be saved automatically in your browser.
                 </p>
                 <button
-                    onClick={handleGuestLogin}
-                    className="w-full mb-4 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold py-3 px-4 rounded-md hover:opacity-90 transition-opacity"
+                    onClick={handleGoogleLoginClick}
+                    className="w-full inline-flex justify-center items-center bg-white text-gray-800 font-semibold py-3 px-4 rounded-md shadow-md hover:bg-gray-200 transition-colors"
                 >
-                    Continue as Guest
+                    <GoogleIcon className="w-5 h-5 mr-3" />
+                    Sign in with Google
                 </button>
-                <div className="relative my-4">
+                 <div className="relative my-4">
                   <div className="absolute inset-0 flex items-center" aria-hidden="true">
                     <div className="w-full border-t border-gray-600" />
                   </div>
@@ -40,11 +43,10 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                   </div>
                 </div>
                 <button
-                    onClick={handleGoogleLoginClick}
-                    className="w-full inline-flex justify-center items-center bg-white text-gray-800 font-semibold py-3 px-4 rounded-md shadow-md hover:bg-gray-200 transition-colors"
+                    onClick={handleGuestLogin}
+                    className="w-full bg-gray-600/50 text-gray-300 font-bold py-3 px-4 rounded-md hover:bg-gray-600/80 transition-opacity"
                 >
-                    <GoogleIcon className="w-5 h-5 mr-3" />
-                    Sign in with Google
+                    Continue as Guest
                 </button>
             </div>
         </div>

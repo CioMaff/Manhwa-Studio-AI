@@ -1,15 +1,16 @@
+
 import React, { useState } from 'react';
 import { Studio } from './components/Studio';
 import { Auth } from './components/Auth';
 import type { Project } from './types';
 
-// Función para obtener el proyecto desde localStorage
+// Function to load project from localStorage based on username
 const loadProjectFromStorage = (username: string): Project | null => {
     try {
         const savedProject = localStorage.getItem(`gemini-manhwa-project-${username}`);
         if (savedProject) {
             const project = JSON.parse(savedProject);
-            // Ensure history arrays exist
+            // Ensure history arrays exist to prevent runtime errors
             if (!project.agentHistory) project.agentHistory = [];
             if (!project.chatHistory) project.chatHistory = [];
             return project;
@@ -21,7 +22,7 @@ const loadProjectFromStorage = (username: string): Project | null => {
     }
 };
 
-// Función para guardar el proyecto en localStorage
+// Function to save project to localStorage
 export const saveProjectToStorage = (username: string, project: Project) => {
     try {
         localStorage.setItem(`gemini-manhwa-project-${username}`, JSON.stringify(project));
