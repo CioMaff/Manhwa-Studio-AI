@@ -1,5 +1,6 @@
 
-import React, { useState, useRef, useEffect } from 'react';
+
+import React, { useState, useRef, useLayoutEffect } from 'react';
 import type { ChatMessage, Project, AgentFunctionCall, ContextPillItem } from '../types';
 import { chatWithAgent } from '../services/geminiService';
 import { ContextPicker } from './ContextPicker';
@@ -16,8 +17,16 @@ interface AssistantPanelProps {
 }
 
 const BoldRenderer = ({ text }: { text: string }) => {
-    const parts = text.split(/(\*\*.*?\*\*)/g);
-    return (<p className="whitespace-pre-wrap">{parts.map((part, index) => part.startsWith('**') && part.endsWith('**') ? <strong key={index}>{part.slice(2, -2)}</strong> : part)}</p>);
+    const parts = text.split(/(\*\*.*?\*\*|`.*?`)/g);
+    return (<p className="whitespace-pre-wrap">{parts.map((part, index) => {
+        if (part.startsWith('**') && part.endsWith('**')) {
+            return <strong key={index}>{part.slice(2, -2)}</strong>;
+        }
+        if (part.startsWith('`') && part.endsWith('`')) {
+            return <code key={index} className="bg-gray-900/50 text-purple-300 text-xs p-1 rounded-md">{part.slice(1, -1)}</code>
+        }
+        return part;
+    })}</p>);
 };
 
 export const AssistantPanel: React.FC<AssistantPanelProps> = ({ project, isAgentMode, setIsAgentMode, selectedPanelIds, onExecuteAction, updateHistory }) => {
@@ -32,14 +41,14 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ project, isAgent
         updateHistory(isAgentMode ? 'agent' : 'chat', updater(messages));
     };
 
-    useEffect(() => {
+    useLayoutEffect(() => {
         if (chatContainerRef.current) {
             chatContainerRef.current.scrollTop = chatContainerRef.current.scrollHeight;
         }
     }, [messages]);
 
     const handleSendMessage = async () => {
-        if (!input.trim() && contextPills.length === 0 || isLoading) return;
+        if ((!input.trim() && contextPills.length === 0) || isLoading) return;
         
         const userMessage: ChatMessage = { 
             id: Date.now().toString(), 
@@ -64,7 +73,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ project, isAgent
             setMessages(prev => [...prev, modelMessage]);
         } catch (error) {
             console.error("Error sending message:", error);
-            const errorMessage: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: "Lo siento, he encontrado un error." };
+            const errorMessage: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: "Lo siento, he encontrado un error. Por favor, revisa la consola para más detalles." };
             setMessages(prev => [...prev, errorMessage]);
         } finally {
             setIsLoading(false);
@@ -97,7 +106,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ project, isAgent
 
     return (
         <div className="bg-gray-800/50 rounded-lg border border-gray-700 h-full flex flex-col">
-            <div ref={chatContainerRef} className="flex-grow p-4 overflow-y-auto space-y-4">
+            <div ref={chatContainerRef} className="flex-grow p-4 overflow-y-auto space-y-4 scroll-smooth">
                 {messages.map(msg => (
                     <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                         <div className={`p-3 rounded-lg max-w-lg ${msg.role === 'user' ? 'bg-purple-600' : 'bg-gray-700'}`}>
@@ -106,7 +115,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ project, isAgent
                                <div className="mt-2 pt-2 border-t border-purple-400/50">
                                    <p className="text-xs text-purple-200 mb-2">Sugerencia del Agente:</p>
                                    <button onClick={() => onExecuteAction(msg.functionCall!)} className="w-full bg-purple-500 text-white font-bold py-2 px-3 rounded-md text-sm hover:bg-purple-400 transition-colors">
-                                       Crear Viñeta: "{msg.functionCall.args.prompts[0].substring(0, 30)}..."
+                                       Crear: "{msg.functionCall.args.prompts[0].substring(0, 30)}..."
                                    </button>
                                </div>
                            )}
@@ -141,7 +150,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ project, isAgent
                     }
                     <div className="flex items-center gap-2">
                         <input type="text" value={input} onChange={e => setInput(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSendMessage()} placeholder={isAgentMode ? 'Pide ayuda a tu agente...' : 'Habla con Nano...'} className="w-full bg-transparent focus:outline-none" disabled={isLoading} />
-                        <button onClick={() => handleSendMessage()} disabled={!input.trim() && contextPills.length === 0 || isLoading} className="bg-purple-600 px-4 py-2 rounded-md hover:bg-purple-700 disabled:bg-gray-500">Send</button>
+                        <button onClick={() => handleSendMessage()} disabled={(!input.trim() && contextPills.length === 0) || isLoading} className="bg-purple-600 px-4 py-2 rounded-md hover:bg-purple-700 disabled:bg-gray-500 disabled:cursor-not-allowed">Send</button>
                     </div>
                 </div>
             </div>

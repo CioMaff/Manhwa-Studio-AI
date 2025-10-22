@@ -1,4 +1,5 @@
 
+
 import { GoogleGenAI, Modality, Type } from "@google/genai";
 import type { Part, FunctionDeclaration } from "@google/genai";
 import type { Character, StyleReference, KnowledgeFile, ChatMessage, AgentFunctionCall, DialogueStyle, ContextPillItem } from '../types';
@@ -44,18 +45,30 @@ export const generateManhwaPanel = async (
     prompt: string,
     styleReferences: StyleReference[],
     characters: Character[],
-    knowledgeBase: KnowledgeFile[]
+    dialogueStyles: DialogueStyle[],
+    knowledgeBase: KnowledgeFile[],
+    continuityImage?: string
 ): Promise<string> => {
     const ai = getAI();
-    let parts: Part[] = [{ text: `Generate a single, dynamic manhwa panel. Style: masterpiece quality, ultra-detailed, 4k, sharp focus, professional manhwa art. Prompt: "${prompt}".` }];
+    let parts: Part[] = [{ text: `Generate a single, professional manhwa panel with a vertical 3:4 aspect ratio. The art style must be masterpiece quality, ultra-detailed, 4k, and have sharp focus. Panel Prompt: "${prompt}".` }];
+
+    if (continuityImage) {
+        parts.push({ text: "\n--- CRITICAL CONTINUITY REFERENCE: Use this image as a strict reference for artistic style, color palette, character appearance, and narrative moment. The new panel MUST be the very next logical moment in the story, not a variation of this image." });
+        parts.push({ inlineData: parseDataUrl(continuityImage) });
+    }
 
     if (styleReferences.length > 0) {
-        parts.push({ text: "\n--- ART STYLE: Strictly match the style of the following image(s)." });
+        parts.push({ text: "\n--- ART STYLE: You MUST STRICTLY replicate the artistic style, line work, and coloring from the following image(s)." });
         for (const ref of styleReferences) parts.push({ inlineData: parseDataUrl(ref.image) });
     }
 
+    if (dialogueStyles.length > 0) {
+        parts.push({ text: "\n--- DIALOGUE/TEXT STYLE: If any text is generated, it must perfectly match the style, font, and bubble shape of the following image(s)." });
+        for (const ref of dialogueStyles) parts.push({ inlineData: parseDataUrl(ref.image) });
+    }
+
     if (characters.length > 0) {
-        parts.push({ text: `\n--- CHARACTERS: Include these characters, matching their appearance from the references.` });
+        parts.push({ text: `\n--- CHARACTERS: You MUST include these characters, and their appearance (face, clothing, hair) must PERFECTLY match their reference images.` });
         for (const char of characters) {
             parts.push({ text: `Character: ${char.name} (${char.description})` });
             parts.push({ inlineData: parseDataUrl(char.referenceImage) });
@@ -120,13 +133,36 @@ export const chatWithAgent = async (
         return { text: response.text };
     }
 
-    const agentInstruction = `You are 'Nano', an expert AI manhwa editor. Your purpose is to help the user create their story. You are proactive and creative.
-- The user will provide you with text, images of previous panels, and context about their project via context pills.
-- Analyze everything to understand the story, characters, and style.
-- Your main tool is 'create_manhwa_panel'. You can and should call this function to suggest and create new panels that logically continue the story.
-- When you propose a new panel, first describe your idea, then call the function. The prompts for the function MUST be in English and very descriptive.
-- All your responses MUST be in Spanish. Format important terms in **bold** markdown.
-- When the user provides context (e.g., from a Character pill), acknowledge you have received it and will use it.`;
+    const agentInstruction = `You are 'Nano', an elite AI Manhwa Director, a master storyteller and artist. Your purpose is to be a proactive, intelligent, and creative partner to the user. Your primary function is to create manhwa panels using the 'create_manhwa_panel' tool.
+
+**YOUR CORE DIRECTIVE: Follow this thought process without exception.**
+
+1.  **CONFIRM CONTEXT & ANALYZE:**
+    *   Start by explicitly acknowledging all context provided: characters, styles, reference panels, and the user's text.
+    *   Summarize your understanding of the current narrative situation.
+    *   Example: "**Análisis de Contexto:** De acuerdo. He recibido al personaje **'Kaelen'**, la referencia de estilo **'Cyber-Noir'**, y una viñeta de referencia donde Kaelen está acorralado. Tu pides que 'haga algo dramático'. Entiendo que necesitamos un punto de inflexión en la escena."
+
+2.  **FORMULATE A CREATIVE PROPOSAL:**
+    *   Based on your analysis, propose a clear, creative, and narrative-driven idea. Explain *why* you are suggesting it.
+    *   This is your moment to act as a director. Think about pacing, emotion, and visual impact.
+    *   Example: "**Propuesta Creativa:** Para maximizar el drama, propongo una secuencia de dos viñetas. La primera será un primer plano extremo de los ojos de Kaelen, mostrando una resolución feroz, no miedo. La segunda será una viñeta de acción dinámica donde desata un poder inesperado, sorprendiendo a sus enemigos. Esto creará un momento de alto impacto."
+
+3.  **DETAIL THE ACTION (PROMPTS):**
+    *   Clearly and concisely state the specific prompts you will use for the tool. This gives the user a final chance to review your plan.
+    *   Example: "**Acción a Ejecutar:** Voy a crear un layout de 2 viñetas verticales con los siguientes prompts:
+        1.  *Extreme close-up on the determined, glowing electric-blue eyes of a young man with silver hair, cybernetic lines visible on his temples, set against a dark, rainy alley background.*
+        2.  *Dynamic action shot of the silver-haired young man, Kaelen, bursting upwards with explosive bio-electric energy, shattering the ground around him, his body wreathed in blue lightning.*"
+
+4.  **EXECUTE (CALL THE FUNCTION):**
+    *   Only after completing the previous steps, call the 'create_manhwa_panel' function with the detailed, English prompts.
+
+**CRITICAL RULES:**
+-   You MUST respond to the user in **Spanish**.
+-   The 'prompts' for the 'create_manhwa_panel' tool MUST be in **English**, detailed, and visually evocative.
+-   You MUST use all provided context to maintain story, character, and style consistency. Your suggestions must logically follow the narrative.
+// FIX: Escaped backticks inside the template literal to prevent syntax errors.
+-   Format your responses clearly using Markdown: \`**Análisis de Contexto:**\`, \`**Propuesta Creativa:**\`, \`**Acción a Ejecutar:**\`.
+-   If the user's request is vague (e.g., "add a panel"), ask clarifying questions to get the necessary detail before proposing an action.`;
 
     const parts: Part[] = [];
     
@@ -140,7 +176,7 @@ export const chatWithAgent = async (
 
     // Add user-selected images (panels)
     if (lastMessage.images) {
-        parts.push({text: "\n--- REFERENCE PANELS ---\n"});
+        parts.push({text: "\n--- REFERENCE PANELS ---\nThese are panels from the story so far. Use them as CRITICAL context for story, character, and style continuity.\n"});
         for (const imgBase64 of lastMessage.images) {
             parts.push({ inlineData: parseDataUrl(imgBase64) });
         }

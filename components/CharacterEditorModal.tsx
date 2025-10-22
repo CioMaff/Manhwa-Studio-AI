@@ -12,23 +12,32 @@ interface CharacterEditorModalProps {
 }
 
 export const CharacterEditorModal: React.FC<CharacterEditorModalProps> = ({ isOpen, onClose, character, onSave, onDelete }) => {
-  const [name, setName] = useState(character.name);
-  const [description, setDescription] = useState(character.description);
+  const [name, setName] = useState('');
+  const [description, setDescription] = useState('');
 
+  // Use useEffect to reset state when the character prop changes (i.e., a new character is selected)
   useEffect(() => {
-    if (isOpen) {
+    if (character) {
       setName(character.name);
       setDescription(character.description);
     }
-  }, [isOpen, character]);
+  }, [character]);
 
   const handleSave = () => {
     onSave({ ...character, name, description });
+    // The parent component is responsible for closing the modal by setting editingCharacter to null.
+    // Explicitly calling onClose here makes it more robust.
+    onClose(); 
   };
   
   const handleDelete = () => {
       onDelete(character.id);
+      // The parent component handles closing the modal.
+      onClose();
   }
+
+  // Prevent rendering if there's no character, which could happen during state transitions
+  if (!character) return null;
 
   return (
     <Modal isOpen={isOpen} onClose={onClose} title={`Edit ${character.name}`}>

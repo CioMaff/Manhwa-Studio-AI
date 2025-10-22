@@ -1,4 +1,5 @@
 
+
 import React, { useState } from 'react';
 import type { Project, Character } from '../types';
 import { fileToBase64, textFileToString, compressImageBase64 } from '../utils/fileUtils';
@@ -83,11 +84,28 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProje
     };
     
     const handleDelete = (type: 'character' | 'style' | 'knowledge' | 'dialogue', id: string) => {
-        if(window.confirm(`Are you sure you want to delete this ${type}?`)) {
-            if (type === 'character') updateProject(p => ({ ...p, characters: p.characters.filter(i => i.id !== id) }));
-            if (type === 'style') updateProject(p => ({ ...p, styleReferences: p.styleReferences.filter(i => i.id !== id) }));
-            if (type === 'knowledge') updateProject(p => ({ ...p, knowledgeBase: p.knowledgeBase.filter(i => i.id !== id) }));
-            if (type === 'dialogue') updateProject(p => ({ ...p, dialogueStyles: p.dialogueStyles.filter(i => i.id !== id) }));
+        if (window.confirm(`Are you sure you want to delete this ${type}?`)) {
+            updateProject(p => {
+                const newState = { ...p };
+                switch (type) {
+                    case 'character':
+                        newState.characters = p.characters.filter(i => i.id !== id);
+                        break;
+                    case 'style':
+                        newState.styleReferences = p.styleReferences.filter(i => i.id !== id);
+                        break;
+                    case 'knowledge':
+                        newState.knowledgeBase = p.knowledgeBase.filter(i => i.id !== id);
+                        break;
+                    case 'dialogue':
+                        newState.dialogueStyles = p.dialogueStyles.filter(i => i.id !== id);
+                        break;
+                    default:
+                        // This should not happen, but it's good practice
+                        return p;
+                }
+                return newState;
+            });
         }
     };
     
@@ -128,7 +146,10 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProje
     };
     
     const handleSaveEditedCharacter = (editedChar: Character) => {
-        updateProject(p => ({ ...p, characters: p.characters.map(c => c.id === editedChar.id ? editedChar : c) }));
+        updateProject(p => ({
+            ...p,
+            characters: p.characters.map(c => c.id === editedChar.id ? editedChar : c)
+        }));
         setEditingCharacter(null);
     };
 

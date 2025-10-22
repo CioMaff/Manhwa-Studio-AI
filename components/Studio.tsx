@@ -1,4 +1,5 @@
 
+
 import React, { useState, useEffect, useCallback } from 'react';
 import type { Project, Chapter, Settings, AgentFunctionCall, Panel, ChatMessage } from '../types';
 import { AssetManager } from './AssetManager';
@@ -42,7 +43,6 @@ const getDefaultProject = (username: string): Project => ({
     chatHistory: [],
 });
 
-// Fix: Define StudioProps interface
 interface StudioProps {
     username: string;
     loadProject: () => Project | null;
@@ -76,9 +76,18 @@ export const Studio: React.FC<StudioProps> = ({ username, loadProject, setProjec
         return () => clearTimeout(timer);
     }, [project, username, setProjectTitle]);
     
+    // Effect to ensure activeChapterId is always valid
     useEffect(() => {
-        if (!activeChapterId && project.chapters.length > 0) setActiveChapterId(project.chapters[0].id);
-    }, [activeChapterId, project.chapters]);
+        const chapterExists = project.chapters.some(c => c.id === activeChapterId);
+        if (!chapterExists && project.chapters.length > 0) {
+            setActiveChapterId(project.chapters[0].id);
+        } else if (project.chapters.length === 0) {
+            // Handle case where all chapters are deleted
+             const newChapter: Chapter = { id: `chap-${Date.now()}`, title: `Chapter 1`, panels: [] };
+             updateProject(p => ({ ...p, chapters: [newChapter] }));
+             setActiveChapterId(newChapter.id);
+        }
+    }, [project.chapters, activeChapterId]);
 
     const updateProject = useCallback((updater: (p: Project) => Project) => setProject(updater), []);
     
@@ -90,20 +99,40 @@ export const Studio: React.FC<StudioProps> = ({ username, loadProject, setProjec
         setActiveChapterId(newChapter.id);
     };
 
-    const handleDeleteChapter = (chapterId: string) => {
-        if (project.chapters.length <= 1) return alert("You must have at least one chapter.");
-        if (window.confirm("Delete this chapter? This cannot be undone.")) {
-            updateProject(p => {
-                const newChapters = p.chapters.filter(c => c.id !== chapterId);
-                if (activeChapterId === chapterId) setActiveChapterId(newChapters[0]?.id || null);
-                return { ...p, chapters: newChapters };
-            });
+    const handleDeleteChapter = (chapterIdToDelete: string) => {
+        if (project.chapters.length <= 1) {
+            alert("You must have at least one chapter.");
+            return;
+        }
+        if (window.confirm("Are you sure you want to delete this chapter? This action cannot be undone.")) {
+            const chapterIndex = project.chapters.findIndex(c => c.id === chapterIdToDelete);
+            let newActiveChapterId = activeChapterId;
+
+            if (chapterIdToDelete === activeChapterId) {
+                // If deleting the active chapter, select the previous one, or the next one if it's the first
+                newActiveChapterId = project.chapters[chapterIndex - 1]?.id || project.chapters[chapterIndex + 1]?.id;
+            }
+            
+            // The useEffect will handle setting the active chapter ID if the current one is removed.
+            updateProject(p => ({
+                ...p,
+                chapters: p.chapters.filter(c => c.id !== chapterIdToDelete)
+            }));
+
+            // We explicitly set the new active chapter ID here to make the change immediate for the user.
+            if(newActiveChapterId !== activeChapterId) {
+                setActiveChapterId(newActiveChapterId);
+            }
         }
     };
     
     const handleRenameChapter = (chapterId: string) => {
-        const newTitle = prompt("Enter new chapter title:", project.chapters.find(c=>c.id === chapterId)?.title);
-        if (newTitle?.trim()) updateProject(p => ({ ...p, chapters: p.chapters.map(c => c.id === chapterId ? { ...c, title: newTitle.trim() } : c) }));
+        const chapterToRename = project.chapters.find(c => c.id === chapterId);
+        if (!chapterToRename) return;
+        const newTitle = prompt("Enter new chapter title:", chapterToRename.title);
+        if (newTitle?.trim()) {
+            updateProject(p => ({ ...p, chapters: p.chapters.map(c => c.id === chapterId ? { ...c, title: newTitle.trim() } : c) }));
+        }
     };
     
     const handleGenerateCover = async () => {
@@ -133,12 +162,19 @@ export const Studio: React.FC<StudioProps> = ({ username, loadProject, setProjec
                 const characters = project.characters.filter(c => character_names.includes(c.name));
                 const layoutGrid = layouts[layout_type] || [[1]];
                 
-                const subPanelPromises = prompts.map((p: string, i: number) => 
-                    generateManhwaPanel(p, project.styleReferences, characters, project.knowledgeBase)
-                        .then(compressImageBase64)
-                );
+                const imageUrls: (string | null)[] = [];
+                let lastImageUrl: string | undefined = undefined;
 
-                const imageUrls = await Promise.all(subPanelPromises);
+                // **Sequential Generation Logic**
+                // The agent generates panels one by one in the sequence provided.
+                // Each newly generated panel's image is used as a strong continuity reference
+                // for the next one in the same action, ensuring narrative and visual flow.
+                for (const promptText of prompts) {
+                    const imageUrl = await generateManhwaPanel(promptText, project.styleReferences, characters, project.dialogueStyles, project.knowledgeBase, lastImageUrl);
+                    const compressedUrl = await compressImageBase64(imageUrl);
+                    imageUrls.push(compressedUrl);
+                    lastImageUrl = compressedUrl; // Use the generated image for the next one's context
+                }
 
                 const newPanel: Panel = {
                     id: `panel-${Date.now()}`,
@@ -149,6 +185,8 @@ export const Studio: React.FC<StudioProps> = ({ username, loadProject, setProjec
                         prompt: prompts[i],
                         characterIds: characters.map(c => c.id),
                         imageUrl: url,
+                        styleReferenceIds: project.styleReferences.map(s => s.id), // Store context
+                        dialogueStyleIds: project.dialogueStyles.map(d => d.id), // Store context
                     })),
                 };
 
@@ -169,6 +207,7 @@ export const Studio: React.FC<StudioProps> = ({ username, loadProject, setProjec
                 alert("The agent failed to create the panel.");
             } finally {
                 setAgentGeneratingState({ active: false, prompt: '', insertAfterId: null });
+                setSelectedPanelIds([]);
             }
         }
     };
@@ -233,7 +272,7 @@ export const Studio: React.FC<StudioProps> = ({ username, loadProject, setProjec
                         agentGeneratingState={agentGeneratingState}
                     />
                 ) : (
-                    <div className="bg-gray-800/50 rounded-lg h-full flex items-center justify-center border border-gray-700 text-gray-400"><p>No chapter selected.</p></div>
+                    <div className="bg-gray-800/50 rounded-lg h-full flex items-center justify-center border border-gray-700 text-gray-400"><p>No chapter selected. Create one to begin.</p></div>
                 )}
             </div>
 

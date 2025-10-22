@@ -1,4 +1,5 @@
 
+
 import React, { useState, useMemo, useRef } from 'react';
 import type { Chapter, Panel, Project, SubPanel } from '../types';
 import { generateManhwaPanel } from '../services/geminiService';
@@ -35,9 +36,10 @@ const SubPanelComponent: React.FC<{
     onRegenerate: () => void;
     onAddBubble: () => void;
     isLoading: boolean;
-}> = ({ subPanel, onEditClick, onUploadClick, onDeleteContent, onRegenerate, onAddBubble, isLoading }) => {
+    isSelected: boolean;
+}> = ({ subPanel, onEditClick, onUploadClick, onDeleteContent, onRegenerate, onAddBubble, isLoading, isSelected }) => {
     return (
-        <div className="relative w-full h-full bg-gray-700/50 rounded-md overflow-hidden border-2 border-transparent group">
+        <div className={`relative w-full h-full bg-gray-700/50 rounded-md overflow-hidden border-2 transition-colors group ${isSelected ? 'border-purple-500/80' : 'border-gray-700/50 group-hover:border-purple-600/50'}`}>
              {isLoading && (
                 <div className="absolute inset-0 bg-gray-900/80 flex flex-col items-center justify-center z-20">
                     <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-400"></div>
@@ -80,11 +82,25 @@ export const Canvas: React.FC<CanvasProps> = ({ chapter, setChapter, project, is
     
     const [prompt, setPrompt] = useState('');
     const [selectedCharIds, setSelectedCharIds] = useState<string[]>([]);
+    const [selectedStyleIds, setSelectedStyleIds] = useState<string[]>([]);
+    const [selectedDialogueStyleIds, setSelectedDialogueStyleIds] = useState<string[]>([]);
+    const [continuitySubPanelId, setContinuitySubPanelId] = useState<string | null>(null);
+    
     const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({});
     const [isExporting, setIsExporting] = useState(false);
     
     const hiddenUploadRef = useRef<HTMLInputElement>(null);
     const canvasExportRef = useRef<HTMLDivElement>(null);
+    
+    const continuityOptions = useMemo(() => {
+        if (!currentTarget) return [];
+        // Get all subpanels in reading order (panel by panel, subpanel by subpanel)
+        const allSubPanels = panels.flatMap(p => p.subPanels.map(sp => ({...sp, panelId: p.id})));
+        const currentSubPanelIndex = allSubPanels.findIndex(sp => sp.id === currentTarget.subPanelId);
+        // Return only the subpanels that come before the current one and have an image
+        return allSubPanels.slice(0, currentSubPanelIndex).filter(sp => sp.imageUrl);
+    }, [panels, currentTarget]);
+
 
     const updatePanels = (updater: (prev: Panel[]) => Panel[]) => {
         setChapter({ ...chapter, panels: updater(panels) });
@@ -107,7 +123,7 @@ export const Canvas: React.FC<CanvasProps> = ({ chapter, setChapter, project, is
     };
 
     const handleDeletePanel = (panelId: string) => {
-        if(window.confirm('Delete this entire panel layout?')) {
+        if(window.confirm('Are you sure you want to permanently delete this entire panel layout and all its images?')) {
             updatePanels(prev => prev.filter(p => p.id !== panelId));
         }
     };
@@ -116,30 +132,74 @@ export const Canvas: React.FC<CanvasProps> = ({ chapter, setChapter, project, is
         const panel = panels.find(p => p.id === panelId);
         const subPanel = panel?.subPanels.find(sp => sp.id === subPanelId);
         if (subPanel) {
+            // Load state from the subpanel to "remember" its context
             setPrompt(subPanel.prompt);
-            setSelectedCharIds(subPanel.characterIds);
+            setSelectedCharIds(subPanel.characterIds || []);
+            setSelectedStyleIds(subPanel.styleReferenceIds || []);
+            setSelectedDialogueStyleIds(subPanel.dialogueStyleIds || []);
+            setContinuitySubPanelId(subPanel.continuitySubPanelId || null);
             setCurrentTarget({ panelId, subPanelId });
             setGenerateModalOpen(true);
         }
     };
 
+    const resetGenerateModal = () => {
+        setGenerateModalOpen(false);
+        setPrompt('');
+        setSelectedCharIds([]);
+        setSelectedStyleIds([]);
+        setSelectedDialogueStyleIds([]);
+        setContinuitySubPanelId(null);
+        setCurrentTarget(null);
+    }
+
     const handleGenerate = async (isRegeneration = false) => {
-        if (!currentTarget || !prompt) return;
-        
+        if (!currentTarget) return;
+
         const { panelId, subPanelId } = currentTarget;
         const targetId = `${panelId}-${subPanelId}`;
+        const existingSubPanel = panels.find(p => p.id === panelId)?.subPanels.find(sp => sp.id === subPanelId);
+        
+        // Use existing prompt for regeneration, or the one from the modal for new generation
+        const finalPrompt = isRegeneration ? (existingSubPanel?.prompt || '') : prompt;
+        
+        if (!finalPrompt.trim()) {
+            alert("A prompt is required to generate an image.");
+            return;
+        }
 
         setLoadingStates(prev => ({ ...prev, [targetId]: true }));
         if(!isRegeneration) setGenerateModalOpen(false);
         
         try {
-            const selectedCharacters = project.characters.filter(c => selectedCharIds.includes(c.id));
-            const imageUrl = await generateManhwaPanel(prompt, project.styleReferences, selectedCharacters, project.knowledgeBase);
+            // For regeneration, use the subpanel's saved context. For new, use the modal's state.
+            const charIds = isRegeneration ? existingSubPanel?.characterIds : selectedCharIds;
+            const styleIds = isRegeneration ? existingSubPanel?.styleReferenceIds : selectedStyleIds;
+            const dialogueIds = isRegeneration ? existingSubPanel?.dialogueStyleIds : selectedDialogueStyleIds;
+            const continuityId = isRegeneration ? existingSubPanel?.continuitySubPanelId : continuitySubPanelId;
+
+            const selectedCharacters = project.characters.filter(c => charIds?.includes(c.id));
+            const selectedStyles = project.styleReferences.filter(s => styleIds?.includes(s.id));
+            const selectedDialogueStyles = project.dialogueStyles.filter(ds => dialogueIds?.includes(ds.id));
+            
+            const continuitySubPanel = continuityId ? panels.flatMap(p => p.subPanels).find(sp => sp.id === continuityId) : undefined;
+            const continuityImage = continuitySubPanel?.imageUrl || undefined;
+
+            const imageUrl = await generateManhwaPanel(finalPrompt, selectedStyles, selectedCharacters, selectedDialogueStyles, project.knowledgeBase, continuityImage);
             const compressedUrl = await compressImageBase64(imageUrl);
             
             updatePanels(prev => prev.map(p => {
                 if (p.id === panelId) {
-                    return { ...p, subPanels: p.subPanels.map(sp => sp.id === subPanelId ? { ...sp, imageUrl: compressedUrl, prompt, characterIds: selectedCharIds } : sp ) };
+                    return { ...p, subPanels: p.subPanels.map(sp => sp.id === subPanelId ? { 
+                        ...sp, 
+                        imageUrl: compressedUrl, 
+                        prompt: finalPrompt, 
+                        // Save the full context to the subpanel for future edits/regenerations
+                        characterIds: selectedCharIds,
+                        styleReferenceIds: selectedStyleIds,
+                        dialogueStyleIds: selectedDialogueStyleIds,
+                        continuitySubPanelId: continuitySubPanelId
+                    } : sp ) };
                 }
                 return p;
             }));
@@ -148,33 +208,31 @@ export const Canvas: React.FC<CanvasProps> = ({ chapter, setChapter, project, is
             alert("Failed to generate panel. See console for details.");
         } finally {
             setLoadingStates(prev => ({ ...prev, [targetId]: false }));
-            if(!isRegeneration) {
-                setPrompt('');
-                setSelectedCharIds([]);
-            }
+            if(!isRegeneration) resetGenerateModal();
         }
     };
     
-    const handleRegenerate = async (panelId: string, subPanelId: string) => {
-         const panel = panels.find(p => p.id === panelId);
-         const subPanel = panel?.subPanels.find(sp => sp.id === subPanelId);
-         if (subPanel && subPanel.prompt) {
-             setCurrentTarget({ panelId, subPanelId });
-             setPrompt(subPanel.prompt);
-             setSelectedCharIds(subPanel.characterIds);
-             await handleGenerate(true);
-         } else {
-             alert("No prompt found to regenerate.");
-         }
+    const handleRegenerate = (panelId: string, subPanelId: string) => {
+        const subPanel = panels.find(p => p.id === panelId)?.subPanels.find(sp => sp.id === subPanelId);
+        if (subPanel?.prompt) {
+            setCurrentTarget({ panelId, subPanelId });
+            // The handleGenerate function (with isRegeneration=true) will use the subPanel's saved context.
+            handleGenerate(true);
+        } else {
+            alert("This panel doesn't have a prompt to regenerate from. Please edit it first.");
+            openGenerateModal(panelId, subPanelId);
+        }
     };
     
     const handleDeleteContent = (panelId: string, subPanelId: string) => {
-        updatePanels(prev => prev.map(p => {
-            if (p.id === panelId) {
-                return { ...p, subPanels: p.subPanels.map(sp => sp.id === subPanelId ? { ...sp, imageUrl: null, prompt: '', characterIds: [] } : sp ) };
-            }
-            return p;
-        }));
+        if (window.confirm("Are you sure you want to delete the image and prompt from this panel?")) {
+            updatePanels(prev => prev.map(p => {
+                if (p.id === panelId) {
+                    return { ...p, subPanels: p.subPanels.map(sp => sp.id === subPanelId ? { ...sp, imageUrl: null, prompt: '', characterIds: [], styleReferenceIds: [], dialogueStyleIds: [], continuitySubPanelId: null } : sp ) };
+                }
+                return p;
+            }));
+        }
     };
 
     const handleUploadClick = (panelId: string, subPanelId: string) => {
@@ -215,7 +273,7 @@ export const Canvas: React.FC<CanvasProps> = ({ chapter, setChapter, project, is
         }).finally(() => setIsExporting(false));
     };
 
-    const toggleCharacterSelection = (charId: string) => setSelectedCharIds(prev => prev.includes(charId) ? prev.filter(id => id !== charId) : [...prev, charId]);
+    const toggleSelection = (id: string, state: string[], setter: React.Dispatch<React.SetStateAction<string[]>>) => setter(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
     const togglePanelSelectionForAgent = (panelId: string) => { if (isAgentMode) setSelectedPanelIds(selectedPanelIds.includes(panelId) ? selectedPanelIds.filter(id => id !== panelId) : [...selectedPanelIds, panelId]); };
     
     const gridTemplates = useMemo(() => {
@@ -262,7 +320,9 @@ export const Canvas: React.FC<CanvasProps> = ({ chapter, setChapter, project, is
                                            onDeleteContent={() => handleDeleteContent(p.id, sp.id)}
                                            onRegenerate={() => handleRegenerate(p.id, sp.id)}
                                            onAddBubble={() => alert('Dialogue bubbles coming soon!')}
-                                           isLoading={loadingStates[`${p.id}-${sp.id}`] || false}/>
+                                           isLoading={loadingStates[`${p.id}-${sp.id}`] || false}
+                                           isSelected={isSelected}
+                                        />
                                     </div>
                                 ))}
                             </div>
@@ -279,11 +339,37 @@ export const Canvas: React.FC<CanvasProps> = ({ chapter, setChapter, project, is
             </div>
 
             <PanelLayoutPickerModal isOpen={isLayoutPickerOpen} onClose={() => setLayoutPickerOpen(false)} onSelect={handleAddLayout} />
-            <Modal isOpen={isGenerateModalOpen} onClose={() => setGenerateModalOpen(false)} title="Generate Panel">
-                 <div className="space-y-4">
-                    {project.characters.length > 0 && (<div className="flex flex-wrap gap-2 items-center"><p className="text-sm font-semibold mr-2">Characters:</p>{project.characters.map(char => (<button key={char.id} onClick={() => toggleCharacterSelection(char.id)} className={`px-3 py-1 text-sm rounded-full ${selectedCharIds.includes(char.id) ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{char.name}</button>))}</div>)}
-                   <textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={"Describe the panel..."} className="w-full p-3 bg-gray-700 rounded-md" rows={3}/>
-                    <button onClick={() => handleGenerate(false)} className="w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold py-2 rounded-md">Generate</button>
+            <Modal isOpen={isGenerateModalOpen} onClose={resetGenerateModal} title="Generate Panel">
+                 <div className="space-y-4 max-h-[80vh] overflow-y-auto p-1">
+                    <textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={"Describe the panel..."} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500" rows={4}/>
+                    
+                    {continuityOptions.length > 0 && (
+                        <div>
+                            <p className="text-sm font-semibold mb-2">Continuidad (Opcional - Selecciona 1)</p>
+                            <div className="relative p-2 bg-gray-900/50 rounded-md">
+                                <div className="flex flex-wrap gap-2 max-h-28 overflow-y-auto">
+                                {continuityOptions.map(sp => (
+                                    <img 
+                                        key={sp.id} 
+                                        src={sp.imageUrl!} 
+                                        alt="Continuity option" 
+                                        onClick={() => setContinuitySubPanelId(sp.id === continuitySubPanelId ? null : sp.id)}
+                                        className={`w-20 h-20 object-cover rounded-md cursor-pointer border-2 transition-all ${continuitySubPanelId === sp.id ? 'border-purple-500 scale-105' : 'border-transparent hover:border-gray-500'}`}
+                                    />
+                                ))}
+                                </div>
+                                {continuitySubPanelId && <div className="absolute bottom-1 right-2 text-xs text-purple-300 bg-purple-900/80 px-2 py-0.5 rounded-md">Continuity Selected</div>}
+                            </div>
+                        </div>
+                    )}
+                    
+                    {project.characters.length > 0 && (<div><p className="text-sm font-semibold mb-2">Characters:</p><div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">{project.characters.map(char => (<button key={char.id} onClick={() => toggleSelection(char.id, selectedCharIds, setSelectedCharIds)} className={`px-3 py-1 text-sm rounded-full ${selectedCharIds.includes(char.id) ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{char.name}</button>))}</div></div>)}
+
+                    {project.styleReferences.length > 0 && (<div><p className="text-sm font-semibold mb-2 mt-2">Art Style:</p><div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">{project.styleReferences.map(style => (<button key={style.id} onClick={() => toggleSelection(style.id, selectedStyleIds, setSelectedStyleIds)} className={`px-3 py-1 text-sm rounded-full ${selectedStyleIds.includes(style.id) ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{style.name}</button>))}</div></div>)}
+
+                    {project.dialogueStyles.length > 0 && (<div><p className="text-sm font-semibold mb-2 mt-2">Dialogue Style:</p><div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">{project.dialogueStyles.map(style => (<button key={style.id} onClick={() => toggleSelection(style.id, selectedDialogueStyleIds, setSelectedDialogueStyleIds)} className={`px-3 py-1 text-sm rounded-full ${selectedDialogueStyleIds.includes(style.id) ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{style.name}</button>))}</div></div>)}
+
+                    <button onClick={() => handleGenerate(false)} className="w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold py-2 rounded-md hover:opacity-90 transition-opacity sticky bottom-0">Generate</button>
                  </div>
             </Modal>
         </div>

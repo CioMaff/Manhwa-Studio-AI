@@ -3,6 +3,9 @@ export interface SubPanel {
   id: string;
   prompt: string;
   characterIds: string[];
+  styleReferenceIds?: string[];
+  dialogueStyleIds?: string[];
+  continuitySubPanelId?: string | null;
   imageUrl: string | null;
   content?: string; // For text bubbles, etc.
 }
