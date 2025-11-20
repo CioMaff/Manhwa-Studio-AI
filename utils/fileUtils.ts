@@ -1,4 +1,3 @@
-
 export const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
@@ -17,7 +16,7 @@ export const textFileToString = (file: File): Promise<string> => {
   });
 };
 
-export const compressImageBase64 = (base64: string, maxWidth = 1024, quality = 0.9): Promise<string> => {
+export const compressImageBase64 = (base64: string, maxWidth = 2048, quality = 0.95): Promise<string> => {
     return new Promise((resolve, reject) => {
         const img = new Image();
         img.src = base64;
@@ -73,10 +72,27 @@ export const cropImageBase64 = (base64: string, targetAspect = 3 / 4): Promise<s
             canvas.width = sWidth;
             canvas.height = sHeight;
 
-            ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, sWidth, sHeight);
+            // Optional: Resize if too small for better quality preview
+            const minWidth = 512;
+            if (canvas.width < minWidth) {
+                canvas.height = (minWidth / canvas.width) * canvas.height;
+                canvas.width = minWidth;
+            }
+
+
+            ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, canvas.width, canvas.height);
 
             resolve(canvas.toDataURL('image/jpeg'));
         };
         img.onerror = (error) => reject(error);
     });
+};
+
+export const downloadBase64Image = (base64: string, filename: string) => {
+    const link = document.createElement('a');
+    link.href = base64;
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
 };

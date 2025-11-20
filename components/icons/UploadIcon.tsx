@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 export const UploadIcon = ({ className = "w-6 h-6" }: { className?: string }) => (

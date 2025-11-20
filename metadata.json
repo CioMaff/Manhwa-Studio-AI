@@ -2,6 +2,8 @@
   "name": "Manhwa Studio",
   "description": "An AI-powered studio to create, write, and illustrate manhwa. Use style references, consistent characters, and AI assistance to bring your story to life. Features include voice-to-text, plot analysis, cover generation, and a conversational AI assistant.",
   "requestFramePermissions": [
-    "microphone"
+    "microphone",
+    "camera",
+    "display-capture"
   ]
 }

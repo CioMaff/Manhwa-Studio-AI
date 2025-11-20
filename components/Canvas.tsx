@@ -1,377 +1,565 @@
-
-
-import React, { useState, useMemo, useRef } from 'react';
-import type { Chapter, Panel, Project, SubPanel } from '../types';
-import { generateManhwaPanel } from '../services/geminiService';
-import { Modal } from './Modal';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import type { Chapter, Panel, SubPanel, ScenePlanPage, Character, StyleReference, ObjectAsset, SceneType, DialogueBubble, BackgroundAsset, NewEntityAnalysis, NewObjectEntity } from '../types';
+// Fix: Import 'generateSpeech' to make it available for use in the component.
+import { generateSubPanelImage, analyzePanelForNewEntities, extractAssetFromImage, generateSpeech } from '../services/geminiService';
 import { PanelLayoutPickerModal } from './PanelLayoutPickerModal';
-import { fileToBase64, compressImageBase64 } from '../utils/fileUtils';
-import html2canvas from 'html2canvas';
-
-// Icons
+import { ScenePlannerModal } from './ScenePlannerModal';
+import { fileToBase64, compressImageBase64, downloadBase64Image } from '../utils/fileUtils';
+import { showConfirmation, showToast } from '../systems/uiSystem';
+import { playAudioFromBase64 } from '../utils/audioUtils';
+import { useProject } from '../contexts/ProjectContext';
+import { DialogueBubbleComponent } from './DialogueBubbleComponent';
+import { SubPanelEditorModal } from './SubPanelEditorModal';
+import { SubPanelComponent } from './SubPanelComponent';
 import { PlusIcon } from './icons/PlusIcon';
 import { TrashIcon } from './icons/TrashIcon';
-import { UploadIcon } from './icons/UploadIcon';
+import { ArrowUpIcon } from './icons/ArrowUpIcon';
+import { ArrowDownIcon } from './icons/ArrowDownIcon';
+import { MagicWandIcon } from './icons/MagicWandIcon';
 import { DownloadIcon } from './icons/DownloadIcon';
-import { EditIcon } from './icons/EditIcon';
-import { RegenerateIcon } from './icons/RegenerateIcon';
-import { TextBubbleIcon } from './icons/TextBubbleIcon';
-import { AgentGeneratingPanel } from './AgentGeneratingPanel';
+import html2canvas from 'html2canvas';
+import { ContinuePanelModal } from './ContinuePanelModal';
 
 interface CanvasProps {
     chapter: Chapter;
     setChapter: (chapter: Chapter) => void;
-    project: Project;
     isAgentMode: boolean;
-    selectedPanelIds: string[];
-    setSelectedPanelIds: (ids: string[]) => void;
-    agentGeneratingState: { active: boolean, prompt: string, insertAfterId: string | null };
+    selectedSubPanelIds: string[];
+    setSelectedSubPanelIds: (ids: string[]) => void;
+    onExecutePlan: (plan: ScenePlanPage[], characters: Character[], styles: StyleReference[], objects: ObjectAsset[], backgrounds: BackgroundAsset[], sceneType: SceneType) => Promise<void>;
+    onCreateCharacterFromPanel: (subPanel: SubPanel) => void;
+    onExtractAsset: (subPanel: SubPanel) => void;
+    onContinuePanel: (subPanel: SubPanel) => void;
 }
 
-const SubPanelComponent: React.FC<{
-    subPanel: SubPanel;
-    onEditClick: () => void;
-    onUploadClick: () => void;
-    onDeleteContent: () => void;
-    onRegenerate: () => void;
-    onAddBubble: () => void;
-    isLoading: boolean;
-    isSelected: boolean;
-}> = ({ subPanel, onEditClick, onUploadClick, onDeleteContent, onRegenerate, onAddBubble, isLoading, isSelected }) => {
+const waitForElementDimensions = (
+    ref: React.MutableRefObject<Record<string, HTMLDivElement | null>>, 
+    id: string, 
+    timeout = 5000,
+    minHeight = 20
+): Promise<{width: number, height: number}> => {
+    return new Promise((resolve, reject) => {
+        const startTime = Date.now();
+        const interval = setInterval(() => {
+            const element = ref.current[id];
+            if (element && element.clientWidth > 0 && element.clientHeight > minHeight) {
+                clearInterval(interval);
+                const resolutionMultiplier = 3.5; // Force high resolution calculation
+                resolve({ width: Math.round(element.clientWidth * resolutionMultiplier), height: Math.round(element.clientHeight * resolutionMultiplier) });
+            } else if (Date.now() - startTime > timeout) {
+                clearInterval(interval);
+                const finalElement = ref.current[id];
+                reject(new Error(`Timeout or invalid dimensions for element ${id}. Width: ${finalElement?.clientWidth}, Height: ${finalElement?.clientHeight}`));
+            }
+        }, 100);
+    });
+};
+
+export const Canvas: React.FC<CanvasProps> = ({
+    chapter,
+    setChapter,
+    isAgentMode,
+    selectedSubPanelIds,
+    setSelectedSubPanelIds,
+    onExecutePlan,
+    onCreateCharacterFromPanel,
+    onExtractAsset,
+    onContinuePanel
+}) => {
+    const { project, updateProject } = useProject();
+    const [isLayoutPickerOpen, setLayoutPickerOpen] = useState(false);
+    const [insertAfterPanelId, setInsertAfterPanelId] = useState<string | null>(null);
+    const [isScenePlannerOpen, setScenePlannerOpen] = useState(false);
+    const [editingSubPanel, setEditingSubPanel] = useState<SubPanel | null>(null);
+    const [playingAudioBubbleId, setPlayingAudioBubbleId] = useState<string | null>(null);
+    const [analysisQueue, setAnalysisQueue] = useState<SubPanel[]>([]);
+    
+    // Continuity / Arrow feature state
+    const [continuingSubPanel, setContinuingSubPanel] = useState<SubPanel | null>(null);
+    
+    const [generationQueue, setGenerationQueue] = useState<SubPanel[]>([]);
+    const [loadingIds, setLoadingIds] = useState<string[]>([]);
+
+    const audioContextRef = useRef<AudioContext | null>(null);
+    const currentAudioSourceRef = useRef<AudioBufferSourceNode | null>(null);
+    const panelContainerRef = useRef<HTMLDivElement | null>(null);
+    const elementRefs = useRef<Record<string, HTMLDivElement | null>>({});
+    const lastGeneratedImageUrlRef = useRef<string | null>(null);
+
+    const updatePanel = useCallback((panelId: string, updater: (p: Panel) => Panel) => {
+        setChapter({
+            ...chapter,
+            panels: chapter.panels.map(p => p.id === panelId ? updater(p) : p),
+        });
+    }, [chapter, setChapter]);
+
+     const updateSubPanel = useCallback((subPanelId: string, updater: (sp: SubPanel) => SubPanel) => {
+        setChapter({
+            ...chapter,
+            panels: chapter.panels.map(p => ({
+                ...p,
+                subPanels: p.subPanels.map(sp => sp.id === subPanelId ? updater(sp) : sp),
+            })),
+        });
+    }, [chapter, setChapter]);
+    
+    const analyzeAndCreateAssets = useCallback(async (subPanel: SubPanel) => {
+        if (!subPanel.imageUrl) return;
+        showToast("Nano is analyzing the panel for new assets...", "info");
+        try {
+            const analysis: NewEntityAnalysis = await analyzePanelForNewEntities(
+                subPanel.imageUrl,
+                subPanel.prompt,
+                project.characters,
+                project.objects
+            );
+
+            if (analysis.new_characters.length === 0 && analysis.new_objects.length === 0) return;
+            
+            showToast(`Nano found ${analysis.new_characters.length} new character(s) and ${analysis.new_objects.length} new object(s). Creating assets...`, 'info');
+
+            for (const char of analysis.new_characters) {
+                onCreateCharacterFromPanel({ ...subPanel, prompt: char.description });
+            }
+
+            for (const obj of analysis.new_objects) {
+                const objImage = await extractAssetFromImage(subPanel.imageUrl, obj.description, 'object');
+                const compressedObjImage = await compressImageBase64(objImage);
+                const characterOwner = project.characters.find(c => c.name === obj.owner_suggestion);
+                const newObject: ObjectAsset = {
+                    id: `obj-${Date.now()}`, name: obj.name_suggestion, image: compressedObjImage,
+                    ownerInfo: { type: characterOwner ? 'character' : 'various', name: characterOwner ? characterOwner.name : 'Various' },
+                };
+                updateProject(p => ({...p, objects: [...p.objects, newObject]}));
+                showToast(`New object asset created: ${newObject.name}`, 'success');
+            }
+
+        } catch (error) {
+            console.error("Failed during automatic asset creation:", error);
+            showToast("Nano had trouble creating new assets from the panel.", "error");
+        }
+    }, [project, updateProject, onCreateCharacterFromPanel]);
+
+
+    useEffect(() => {
+        const itemsToGenerate = chapter.panels
+            .flatMap(p => p.subPanels)
+            .filter(sp => sp.prompt && !sp.imageUrl && !loadingIds.includes(sp.id) && !generationQueue.some(q => q.id === sp.id));
+
+        if (itemsToGenerate.length > 0) {
+            setGenerationQueue(prev => [...prev, ...itemsToGenerate]);
+        }
+    }, [chapter.panels, loadingIds, generationQueue]);
+
+    useEffect(() => {
+        const processQueue = async () => {
+            if (generationQueue.length === 0 || loadingIds.length >= project.settings.maxConcurrentGenerations) {
+                return;
+            }
+
+            const availableSlots = project.settings.maxConcurrentGenerations - loadingIds.length;
+            const itemsToProcess = generationQueue.slice(0, availableSlots);
+            
+            if (itemsToProcess.length === 0) return;
+
+            setLoadingIds(prev => [...prev, ...itemsToProcess.map(item => item.id)]);
+            setGenerationQueue(prev => prev.slice(itemsToProcess.length));
+
+            const generationPromises = itemsToProcess.map(async (item) => {
+                try {
+                    const { width, height } = await waitForElementDimensions(elementRefs, item.id);
+                    
+                    const charIds = item.characterIds || [];
+                    const styleIds = item.styleReferenceIds || [];
+                    const bgIds = item.backgroundIds || [];
+
+                    const characters = project.characters.filter(c => charIds.includes(c.id));
+                    const styles = project.styleReferences.filter(s => styleIds.includes(s.id));
+                    const backgrounds = project.backgrounds.filter(b => bgIds.includes(b.id));
+                    const objects = project.objects; 
+
+                    const continuityId = item.continuitySubPanelId;
+                    let continuityPanel: SubPanel | undefined;
+                    if (continuityId) {
+                        continuityPanel = project.chapters.flatMap(c => c.panels).flatMap(p => p.subPanels).find(sp => sp.id === continuityId);
+                    }
+                    
+                    const continuityRef = continuityPanel?.imageUrl || lastGeneratedImageUrlRef.current;
+                    
+                    // NANO CONSCIOUSNESS: Gather context from previous panels
+                    const allSubPanels = chapter.panels.flatMap(p => p.subPanels);
+                    const currentIndex = allSubPanels.findIndex(sp => sp.id === item.id);
+                    // Get prompts of up to 5 preceding panels to give the AI narrative memory
+                    const previousPrompts = allSubPanels
+                        .slice(Math.max(0, currentIndex - 5), currentIndex)
+                        .map((sp, idx) => `Panel ${idx + 1} (PREVIOUS): ${sp.prompt}`)
+                        .join('\n');
+
+                    const imageUrl = await generateSubPanelImage(
+                        item, 
+                        width, 
+                        height, 
+                        styles, 
+                        characters, 
+                        objects, 
+                        backgrounds, 
+                        previousPrompts, // Pass the consciousness context
+                        continuityRef || undefined
+                    );
+
+                    const compressedUrl = await compressImageBase64(imageUrl);
+                    if (project.settings.maxConcurrentGenerations === 1) {
+                         lastGeneratedImageUrlRef.current = compressedUrl;
+                    }
+                    
+                    updateSubPanel(item.id, () => ({...item, imageUrl: compressedUrl }));
+                    setAnalysisQueue(prev => [...prev, { ...item, imageUrl: compressedUrl }]);
+
+                } catch (error: any) {
+                    console.error(`Error generating for ${item.id}:`, error);
+                    showToast(`Generation failed: ${error.message || 'Unknown error'}`, "error");
+                } finally {
+                    setLoadingIds(prev => prev.filter(id => id !== item.id));
+                }
+            });
+            await Promise.all(generationPromises);
+        };
+        processQueue();
+    }, [generationQueue, loadingIds, project, updateSubPanel, chapter.panels]);
+    
+    useEffect(() => {
+        if (analysisQueue.length > 0) {
+            const queue = [...analysisQueue];
+            setAnalysisQueue([]);
+            const processAnalysisQueue = async () => {
+                for(const item of queue) {
+                    await analyzeAndCreateAssets(item);
+                }
+            };
+            processAnalysisQueue();
+        }
+    }, [analysisQueue, analyzeAndCreateAssets]);
+    
+    useEffect(() => {
+        if (!audioContextRef.current) {
+            try {
+                audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
+            } catch (e) { console.error("AudioContext is not supported by this browser."); }
+        }
+        return () => {
+            if (currentAudioSourceRef.current) currentAudioSourceRef.current.stop();
+            if (audioContextRef.current && audioContextRef.current.state !== 'closed') audioContextRef.current.close().catch(console.error);
+        };
+    }, []);
+    
+    const handleAddPanel = useCallback((layout: number[][]) => {
+        const newPanel: Panel = {
+            id: `panel-${Date.now()}`,
+            layout,
+            subPanels: Array.from(new Set(layout.flat())).map(val => ({
+                id: `subpanel-${Date.now()}-${val}`, prompt: '', characterIds: [], imageUrl: null,
+            })),
+            dialogueBubbles: [],
+        };
+
+        const panelIndex = chapter.panels.findIndex(p => p.id === insertAfterPanelId);
+        const newPanels = [...chapter.panels];
+        if (panelIndex > -1) newPanels.splice(panelIndex + 1, 0, newPanel);
+        else newPanels.push(newPanel);
+
+        setChapter({ ...chapter, panels: newPanels });
+        setLayoutPickerOpen(false);
+        setInsertAfterPanelId(null);
+    }, [chapter, insertAfterPanelId, setChapter]);
+    
+    const handleCreateNextPanel = useCallback((layout: number[][], prompt: string, maintainConsistency: boolean) => {
+        if (!continuingSubPanel) return;
+
+        const newPanel: Panel = {
+            id: `panel-${Date.now()}`,
+            layout,
+            subPanels: Array.from(new Set(layout.flat())).map(val => ({
+                id: `subpanel-${Date.now()}-${val}`, 
+                prompt: prompt, 
+                characterIds: continuingSubPanel.characterIds || [],
+                styleReferenceIds: continuingSubPanel.styleReferenceIds || [],
+                backgroundIds: continuingSubPanel.backgroundIds || [],
+                imageUrl: null,
+                continuitySubPanelId: maintainConsistency ? continuingSubPanel.id : undefined
+            })),
+            dialogueBubbles: [],
+        };
+        
+        // Insert after the panel that contains the source subpanel
+        const parentPanelIndex = chapter.panels.findIndex(p => p.subPanels.some(sp => sp.id === continuingSubPanel.id));
+        const newPanels = [...chapter.panels];
+        if (parentPanelIndex > -1) {
+             newPanels.splice(parentPanelIndex + 1, 0, newPanel);
+        } else {
+            newPanels.push(newPanel);
+        }
+        
+        setChapter({ ...chapter, panels: newPanels });
+        setContinuingSubPanel(null); // Close modal
+        showToast("Next scene created. Generation starting...", "success");
+
+    }, [chapter, continuingSubPanel, setChapter]);
+
+    const handleDeletePanel = useCallback(async (panelId: string) => {
+        const confirmed = await showConfirmation({ title: "Delete Panel", message: "Are you sure you want to delete this panel and all its content?" });
+        if (confirmed) {
+            setChapter({ ...chapter, panels: chapter.panels.filter(p => p.id !== panelId) });
+        }
+    }, [chapter, setChapter]);
+    
+    const movePanel = useCallback((panelId: string, direction: 'up' | 'down') => {
+        const index = chapter.panels.findIndex(p => p.id === panelId);
+        if (index === -1) return;
+        const newIndex = direction === 'up' ? index - 1 : index + 1;
+        if (newIndex < 0 || newIndex >= chapter.panels.length) return;
+        const newPanels = [...chapter.panels];
+        const [movedPanel] = newPanels.splice(index, 1);
+        newPanels.splice(newIndex, 0, movedPanel);
+        setChapter({ ...chapter, panels: newPanels });
+    }, [chapter, setChapter]);
+    
+    const handleSaveSubPanelEdit = useCallback((updatedSubPanel: SubPanel) => {
+        updateSubPanel(updatedSubPanel.id, () => ({...updatedSubPanel, imageUrl: null }));
+        setEditingSubPanel(null);
+    }, [updateSubPanel]);
+
+    const handleAddBubble = useCallback((panelId: string) => {
+        const defaultStyle = project.dialogueStyles.length > 0 ? project.dialogueStyles[0].id : undefined;
+        const newBubble: DialogueBubble = {
+            id: `bubble-${Date.now()}`,
+            text: 'New Dialogue',
+            x: 10,
+            y: 10,
+            width: 150,
+            height: 80,
+            zIndex: 10,
+            styleId: defaultStyle
+        };
+        updatePanel(panelId, (p) => ({ ...p, dialogueBubbles: [...p.dialogueBubbles, newBubble] }));
+    }, [project.dialogueStyles, updatePanel]);
+
+    const handleUpdateBubble = useCallback((panelId: string, bubbleId: string, updates: Partial<DialogueBubble>) => {
+        updatePanel(panelId, (p) => ({
+            ...p,
+            dialogueBubbles: p.dialogueBubbles.map(b => b.id === bubbleId ? { ...b, ...updates } : b)
+        }));
+    }, [updatePanel]);
+
+    const handleDeleteBubble = useCallback((panelId: string, bubbleId: string) => {
+        updatePanel(panelId, (p) => ({
+            ...p,
+            dialogueBubbles: p.dialogueBubbles.filter(b => b.id !== bubbleId)
+        }));
+    }, [updatePanel]);
+
+    const handleBringBubbleToFront = useCallback((panelId: string, bubbleId: string) => {
+        updatePanel(panelId, (p) => {
+            const maxZ = Math.max(...p.dialogueBubbles.map(b => b.zIndex), 0);
+            return {
+                ...p,
+                dialogueBubbles: p.dialogueBubbles.map(b => b.id === bubbleId ? { ...b, zIndex: maxZ + 1 } : b)
+            };
+        });
+    }, [updatePanel]);
+
+    const handlePlayAudio = useCallback(async (text: string, bubbleId: string) => {
+        if (!audioContextRef.current) return showToast("Audio context not available.", "error");
+        if (currentAudioSourceRef.current) { currentAudioSourceRef.current.stop(); currentAudioSourceRef.current = null; }
+        setPlayingAudioBubbleId(bubbleId);
+        try {
+            const base64Audio = await generateSpeech(text);
+            const source = await playAudioFromBase64(base64Audio, audioContextRef.current);
+            currentAudioSourceRef.current = source;
+            source.onended = () => { setPlayingAudioBubbleId(null); currentAudioSourceRef.current = null; };
+        } catch (error) {
+            console.error(error); showToast("Could not play audio.", "error"); setPlayingAudioBubbleId(null);
+        }
+    }, []);
+
+    const toggleSubPanelSelection = useCallback((subPanelId: string) => {
+        if (!isAgentMode) return;
+        const newSelection = selectedSubPanelIds.includes(subPanelId) ? selectedSubPanelIds.filter(id => id !== subPanelId) : [...selectedSubPanelIds, subPanelId];
+        setSelectedSubPanelIds(newSelection);
+    }, [isAgentMode, selectedSubPanelIds, setSelectedSubPanelIds]);
+
+    const handleRegenerate = (subPanel: SubPanel) => {
+        updateSubPanel(subPanel.id, sp => ({ ...sp, imageUrl: null }));
+    };
+
+    const handleDeleteContent = (subPanel: SubPanel) => {
+        updateSubPanel(subPanel.id, sp => ({ ...sp, imageUrl: null, prompt: '' }));
+    };
+
+    const handleDownloadChapter = useCallback(async () => {
+        if (!panelContainerRef.current) return;
+        showToast("Generating High-Quality Webtoon Strip...", "info");
+
+        try {
+            const panelElements = Array.from(panelContainerRef.current.children) as HTMLElement[];
+            const canvases: HTMLCanvasElement[] = [];
+            let totalHeight = 0;
+            let maxWidth = 0;
+
+            // Generate canvas for each panel individually to maintain high res
+            for (const panelEl of panelElements) {
+                // Skip hidden/UI elements
+                if (!panelEl.classList.contains('panel-container')) continue;
+                
+                const canvas = await html2canvas(panelEl, {
+                    backgroundColor: '#111827',
+                    scale: 2, // High res
+                    ignoreElements: (element) => element.tagName === 'BUTTON' || element.classList.contains('opacity-0') // Ignore UI buttons
+                });
+                canvases.push(canvas);
+                totalHeight += canvas.height;
+                maxWidth = Math.max(maxWidth, canvas.width);
+            }
+
+            if (canvases.length === 0) {
+                showToast("No panels to download.", "error");
+                return;
+            }
+
+            // Stitch vertically
+            const finalCanvas = document.createElement('canvas');
+            finalCanvas.width = maxWidth;
+            finalCanvas.height = totalHeight + (canvases.length * 20); // Add spacing
+            const ctx = finalCanvas.getContext('2d');
+            if (!ctx) throw new Error("Could not get canvas context");
+
+            ctx.fillStyle = '#111827';
+            ctx.fillRect(0, 0, finalCanvas.width, finalCanvas.height);
+
+            let yOffset = 0;
+            for (const canvas of canvases) {
+                const xOffset = (maxWidth - canvas.width) / 2;
+                ctx.drawImage(canvas, xOffset, yOffset);
+                yOffset += canvas.height + 20; 
+            }
+
+            downloadBase64Image(finalCanvas.toDataURL('image/jpeg', 0.95), `${chapter.title}-webtoon.jpg`);
+            showToast("Webtoon strip downloaded successfully!", "success");
+        } catch (error) {
+            console.error(error); 
+            showToast("Could not download chapter image.", "error");
+        }
+    }, [chapter.title]);
+
     return (
-        <div className={`relative w-full h-full bg-gray-700/50 rounded-md overflow-hidden border-2 transition-colors group ${isSelected ? 'border-purple-500/80' : 'border-gray-700/50 group-hover:border-purple-600/50'}`}>
-             {isLoading && (
-                <div className="absolute inset-0 bg-gray-900/80 flex flex-col items-center justify-center z-20">
-                    <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-400"></div>
-                    <p className="text-xs mt-2">Generating...</p>
+        <div className="h-full bg-gray-900 overflow-y-auto text-white p-4">
+            <div className="flex justify-between items-center mb-4 sticky top-0 bg-gray-900/80 backdrop-blur-sm z-30 p-2 rounded-lg">
+                <button onClick={handleDownloadChapter} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-cyan-600 rounded-md hover:opacity-90 transition-opacity">
+                    <DownloadIcon className="w-4 h-4" /> Download Chapter
+                </button>
+                <button onClick={() => setScenePlannerOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-purple-600 to-blue-600 rounded-md hover:opacity-90 transition-opacity">
+                    <MagicWandIcon className="w-4 h-4" /> Plan Scene with AI
+                </button>
+            </div>
+            
+            {chapter.panels.length === 0 && (
+                <div className="text-center text-gray-500 pt-10">
+                    <p>This chapter is empty.</p>
+                    <button onClick={() => { setInsertAfterPanelId(null); setLayoutPickerOpen(true); }} className="mt-4 flex items-center gap-2 mx-auto px-4 py-2 text-sm font-semibold text-white bg-purple-600 rounded-md hover:bg-purple-700">
+                        <PlusIcon className="w-4 h-4"/> Add First Panel
+                    </button>
                 </div>
             )}
-            {subPanel.imageUrl ? (
-                <>
-                    <img src={subPanel.imageUrl} alt={subPanel.prompt || 'manhwa panel'} className="w-full h-full object-cover" />
-                    <div className="absolute top-2 right-2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-opacity z-10">
-                        <button onClick={onEditClick} title="Edit/Generate" className="p-2 bg-gray-800/80 rounded-full hover:bg-purple-600"><EditIcon className="w-4 h-4" /></button>
-                        <button onClick={onRegenerate} title="Regenerate" className="p-2 bg-gray-800/80 rounded-full hover:bg-purple-600"><RegenerateIcon className="w-4 h-4" /></button>
-                        <button onClick={onAddBubble} title="Add Dialogue" className="p-2 bg-gray-800/80 rounded-full hover:bg-purple-600"><TextBubbleIcon className="w-4 h-4" /></button>
-                        <button onClick={onDeleteContent} title="Delete Content" className="p-2 bg-red-600/80 rounded-full hover:bg-red-500"><TrashIcon className="w-4 h-4" /></button>
-                    </div>
-                </>
-            ) : (
-                <div className="w-full h-full flex items-center justify-center text-gray-500 hover:text-white transition-all">
-                    <div className="text-center">
-                       <button onClick={onEditClick} className="p-3 rounded-full hover:bg-purple-500/20 mb-2">
-                            <PlusIcon className="w-12 h-12" />
-                       </button>
-                       <button onClick={onUploadClick} className="p-3 rounded-full hover:bg-purple-500/20">
-                            <UploadIcon className="w-8 h-8"/>
-                       </button>
-                    </div>
+            
+            {chapter.panels.length > 0 && (
+                <div ref={panelContainerRef} className="flex flex-col items-center" style={{ gap: `${project.settings.panelSpacing}px` }}>
+                    {chapter.panels.map((panel, panelIndex) => (
+                        <div key={panel.id} className="panel-container group relative w-full" style={{ maxWidth: `${project.settings.pageWidth}px` }}>
+                             <div className="relative bg-gray-900" style={{ display: 'grid', gridTemplateRows: `repeat(${panel.layout.length}, 1fr)`, gridTemplateColumns: `repeat(${panel.layout[0].length}, 1fr)`, gap: `${project.settings.panelSpacing}px`, aspectRatio: `${panel.layout[0].length / panel.layout.length}` }}>
+                                {panel.subPanels.map(sp => {
+                                    const { rowStart, rowEnd, colStart, colEnd } = getGridArea(panel.layout, sp.id);
+                                    const isLoading = loadingIds.includes(sp.id);
+                                    const isQueued = generationQueue.some(item => item.id === sp.id);
+                                    const status = isLoading ? 'generating' : isQueued ? 'queued' : 'idle';
+                                    return (
+                                        <div key={sp.id} style={{ gridArea: `${rowStart} / ${colStart} / ${rowEnd} / ${colEnd}` }} ref={(el) => { elementRefs.current[sp.id] = el; }}>
+                                            <SubPanelComponent
+                                                subPanel={sp}
+                                                onGenerateClick={() => setEditingSubPanel(sp)}
+                                                onEditClick={() => { /* Placeholder */ }}
+                                                onUploadClick={() => { const input = document.createElement('input'); input.type = 'file'; input.accept = 'image/*'; input.onchange = (e) => { const file = (e.target as HTMLInputElement).files?.[0]; if (file) { /* Placeholder */ } }; input.click(); }}
+                                                onDownloadClick={() => downloadBase64Image(sp.imageUrl!, `${chapter.title}-panel-${sp.id}.png`)}
+                                                onDeleteContent={() => handleDeleteContent(sp)}
+                                                onRegenerate={() => handleRegenerate(sp)}
+                                                onAddBubble={() => handleAddBubble(panel.id)}
+                                                onAnalyze={() => { /* Placeholder */ }}
+                                                onCreateCharacter={() => onCreateCharacterFromPanel(sp)}
+                                                onExtractAsset={() => onExtractAsset(sp)}
+                                                onContinuePanel={() => setContinuingSubPanel(sp)}
+                                                status={status}
+                                                isSelected={isAgentMode && selectedSubPanelIds.includes(sp.id)}
+                                                onSelect={() => toggleSubPanelSelection(sp.id)}
+                                                isAgentMode={isAgentMode}
+                                            />
+                                        </div>
+                                    );
+                                })}
+                                {panel.dialogueBubbles.map(bubble => (
+                                    <DialogueBubbleComponent 
+                                        key={bubble.id} 
+                                        bubble={bubble} 
+                                        panelBounds={elementRefs.current[panel.id]?.getBoundingClientRect()} 
+                                        onUpdate={(id, u) => handleUpdateBubble(panel.id, id, u)} 
+                                        onDelete={(id) => handleDeleteBubble(panel.id, id)} 
+                                        onBringToFront={(id) => handleBringBubbleToFront(panel.id, id)} 
+                                        onPlayAudio={(text) => handlePlayAudio(text, bubble.id)} 
+                                        isPlaying={playingAudioBubbleId === bubble.id} 
+                                    />
+                                ))}
+                            </div>
+                            
+                            <div className="absolute -bottom-8 left-0 right-0 flex justify-center items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900/70 backdrop-blur-sm p-1 rounded-full">
+                                <button onClick={() => movePanel(panel.id, 'up')} disabled={panelIndex === 0} className="p-1 rounded-full bg-gray-800/80 hover:bg-gray-700 disabled:opacity-30"><ArrowUpIcon className="w-4 h-4"/></button>
+                                <button onClick={() => handleDeletePanel(panel.id)} className="p-1 rounded-full bg-gray-800/80 text-red-400 hover:bg-red-500/20"><TrashIcon className="w-4 h-4"/></button>
+                                <button onClick={() => { setInsertAfterPanelId(panel.id); setLayoutPickerOpen(true);}} className="p-1 rounded-full bg-gray-800/80 text-purple-400 hover:bg-purple-500/20"><PlusIcon className="w-4 h-4"/></button>
+                            </div>
+                        </div>
+                    ))}
                 </div>
+            )}
+
+            <PanelLayoutPickerModal isOpen={isLayoutPickerOpen} onClose={() => setLayoutPickerOpen(false)} onSelect={handleAddPanel} />
+            <ScenePlannerModal isOpen={isScenePlannerOpen} onClose={() => setScenePlannerOpen(false)} onExecutePlan={onExecutePlan}/>
+            {editingSubPanel && <SubPanelEditorModal isOpen={!!editingSubPanel} onClose={() => setEditingSubPanel(null)} subPanel={editingSubPanel} onSave={handleSaveSubPanelEdit} />}
+            
+            {/* The new Continuity Modal */}
+            {continuingSubPanel && (
+                <ContinuePanelModal 
+                    isOpen={!!continuingSubPanel} 
+                    onClose={() => setContinuingSubPanel(null)} 
+                    sourceSubPanel={continuingSubPanel} 
+                    onConfirm={handleCreateNextPanel} 
+                />
             )}
         </div>
     );
 };
 
-export const Canvas: React.FC<CanvasProps> = ({ chapter, setChapter, project, isAgentMode, selectedPanelIds, setSelectedPanelIds, agentGeneratingState }) => {
-    const { panels, title } = chapter;
-    const { settings } = project;
-
-    const [isLayoutPickerOpen, setLayoutPickerOpen] = useState(false);
-    const [isGenerateModalOpen, setGenerateModalOpen] = useState(false);
-    const [currentTarget, setCurrentTarget] = useState<{ panelId: string, subPanelId: string } | null>(null);
+const getGridArea = (layout: number[][], subPanelId: string) => {
+    const panelValueStr = subPanelId.split('-').pop()!;
+    const panelValue = parseInt(panelValueStr, 10);
+    const numRows = layout.length;
+    const numCols = layout[0].length;
+    let rowStart = numRows + 1, rowEnd = 0, colStart = numCols + 1, colEnd = 0;
     
-    const [prompt, setPrompt] = useState('');
-    const [selectedCharIds, setSelectedCharIds] = useState<string[]>([]);
-    const [selectedStyleIds, setSelectedStyleIds] = useState<string[]>([]);
-    const [selectedDialogueStyleIds, setSelectedDialogueStyleIds] = useState<string[]>([]);
-    const [continuitySubPanelId, setContinuitySubPanelId] = useState<string | null>(null);
-    
-    const [loadingStates, setLoadingStates] = useState<Record<string, boolean>>({});
-    const [isExporting, setIsExporting] = useState(false);
-    
-    const hiddenUploadRef = useRef<HTMLInputElement>(null);
-    const canvasExportRef = useRef<HTMLDivElement>(null);
-    
-    const continuityOptions = useMemo(() => {
-        if (!currentTarget) return [];
-        // Get all subpanels in reading order (panel by panel, subpanel by subpanel)
-        const allSubPanels = panels.flatMap(p => p.subPanels.map(sp => ({...sp, panelId: p.id})));
-        const currentSubPanelIndex = allSubPanels.findIndex(sp => sp.id === currentTarget.subPanelId);
-        // Return only the subpanels that come before the current one and have an image
-        return allSubPanels.slice(0, currentSubPanelIndex).filter(sp => sp.imageUrl);
-    }, [panels, currentTarget]);
-
-
-    const updatePanels = (updater: (prev: Panel[]) => Panel[]) => {
-        setChapter({ ...chapter, panels: updater(panels) });
-    };
-
-    const handleAddLayout = (layout: number[][]) => {
-        const newPanel: Panel = {
-            id: `panel-${Date.now()}`,
-            layout,
-            dialogueBubbles: [],
-            subPanels: layout.flat().filter((v, i, a) => a.indexOf(v) === i).map(id => ({
-                id: `subpanel-${id}-${Date.now()}`,
-                prompt: '',
-                characterIds: [],
-                imageUrl: null
-            })),
-        };
-        updatePanels(prev => [...prev, newPanel]);
-        setLayoutPickerOpen(false);
-    };
-
-    const handleDeletePanel = (panelId: string) => {
-        if(window.confirm('Are you sure you want to permanently delete this entire panel layout and all its images?')) {
-            updatePanels(prev => prev.filter(p => p.id !== panelId));
+    for (let r = 0; r < numRows; r++) {
+        for (let c = 0; c < numCols; c++) {
+            if (layout[r][c] === panelValue) {
+                rowStart = Math.min(rowStart, r + 1);
+                rowEnd = Math.max(rowEnd, r + 2);
+                colStart = Math.min(colStart, c + 1);
+                colEnd = Math.max(colEnd, c + 2);
+            }
         }
-    };
-    
-    const openGenerateModal = (panelId: string, subPanelId: string) => {
-        const panel = panels.find(p => p.id === panelId);
-        const subPanel = panel?.subPanels.find(sp => sp.id === subPanelId);
-        if (subPanel) {
-            // Load state from the subpanel to "remember" its context
-            setPrompt(subPanel.prompt);
-            setSelectedCharIds(subPanel.characterIds || []);
-            setSelectedStyleIds(subPanel.styleReferenceIds || []);
-            setSelectedDialogueStyleIds(subPanel.dialogueStyleIds || []);
-            setContinuitySubPanelId(subPanel.continuitySubPanelId || null);
-            setCurrentTarget({ panelId, subPanelId });
-            setGenerateModalOpen(true);
-        }
-    };
-
-    const resetGenerateModal = () => {
-        setGenerateModalOpen(false);
-        setPrompt('');
-        setSelectedCharIds([]);
-        setSelectedStyleIds([]);
-        setSelectedDialogueStyleIds([]);
-        setContinuitySubPanelId(null);
-        setCurrentTarget(null);
     }
-
-    const handleGenerate = async (isRegeneration = false) => {
-        if (!currentTarget) return;
-
-        const { panelId, subPanelId } = currentTarget;
-        const targetId = `${panelId}-${subPanelId}`;
-        const existingSubPanel = panels.find(p => p.id === panelId)?.subPanels.find(sp => sp.id === subPanelId);
-        
-        // Use existing prompt for regeneration, or the one from the modal for new generation
-        const finalPrompt = isRegeneration ? (existingSubPanel?.prompt || '') : prompt;
-        
-        if (!finalPrompt.trim()) {
-            alert("A prompt is required to generate an image.");
-            return;
-        }
-
-        setLoadingStates(prev => ({ ...prev, [targetId]: true }));
-        if(!isRegeneration) setGenerateModalOpen(false);
-        
-        try {
-            // For regeneration, use the subpanel's saved context. For new, use the modal's state.
-            const charIds = isRegeneration ? existingSubPanel?.characterIds : selectedCharIds;
-            const styleIds = isRegeneration ? existingSubPanel?.styleReferenceIds : selectedStyleIds;
-            const dialogueIds = isRegeneration ? existingSubPanel?.dialogueStyleIds : selectedDialogueStyleIds;
-            const continuityId = isRegeneration ? existingSubPanel?.continuitySubPanelId : continuitySubPanelId;
-
-            const selectedCharacters = project.characters.filter(c => charIds?.includes(c.id));
-            const selectedStyles = project.styleReferences.filter(s => styleIds?.includes(s.id));
-            const selectedDialogueStyles = project.dialogueStyles.filter(ds => dialogueIds?.includes(ds.id));
-            
-            const continuitySubPanel = continuityId ? panels.flatMap(p => p.subPanels).find(sp => sp.id === continuityId) : undefined;
-            const continuityImage = continuitySubPanel?.imageUrl || undefined;
-
-            const imageUrl = await generateManhwaPanel(finalPrompt, selectedStyles, selectedCharacters, selectedDialogueStyles, project.knowledgeBase, continuityImage);
-            const compressedUrl = await compressImageBase64(imageUrl);
-            
-            updatePanels(prev => prev.map(p => {
-                if (p.id === panelId) {
-                    return { ...p, subPanels: p.subPanels.map(sp => sp.id === subPanelId ? { 
-                        ...sp, 
-                        imageUrl: compressedUrl, 
-                        prompt: finalPrompt, 
-                        // Save the full context to the subpanel for future edits/regenerations
-                        characterIds: selectedCharIds,
-                        styleReferenceIds: selectedStyleIds,
-                        dialogueStyleIds: selectedDialogueStyleIds,
-                        continuitySubPanelId: continuitySubPanelId
-                    } : sp ) };
-                }
-                return p;
-            }));
-        } catch (error) {
-            console.error("Failed to generate panel:", error);
-            alert("Failed to generate panel. See console for details.");
-        } finally {
-            setLoadingStates(prev => ({ ...prev, [targetId]: false }));
-            if(!isRegeneration) resetGenerateModal();
-        }
-    };
-    
-    const handleRegenerate = (panelId: string, subPanelId: string) => {
-        const subPanel = panels.find(p => p.id === panelId)?.subPanels.find(sp => sp.id === subPanelId);
-        if (subPanel?.prompt) {
-            setCurrentTarget({ panelId, subPanelId });
-            // The handleGenerate function (with isRegeneration=true) will use the subPanel's saved context.
-            handleGenerate(true);
-        } else {
-            alert("This panel doesn't have a prompt to regenerate from. Please edit it first.");
-            openGenerateModal(panelId, subPanelId);
-        }
-    };
-    
-    const handleDeleteContent = (panelId: string, subPanelId: string) => {
-        if (window.confirm("Are you sure you want to delete the image and prompt from this panel?")) {
-            updatePanels(prev => prev.map(p => {
-                if (p.id === panelId) {
-                    return { ...p, subPanels: p.subPanels.map(sp => sp.id === subPanelId ? { ...sp, imageUrl: null, prompt: '', characterIds: [], styleReferenceIds: [], dialogueStyleIds: [], continuitySubPanelId: null } : sp ) };
-                }
-                return p;
-            }));
-        }
-    };
-
-    const handleUploadClick = (panelId: string, subPanelId: string) => {
-        setCurrentTarget({panelId, subPanelId});
-        hiddenUploadRef.current?.click();
-    };
-
-    const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0] && currentTarget) {
-            const { panelId, subPanelId } = currentTarget;
-            const file = e.target.files[0];
-            const base64 = await fileToBase64(file);
-            const compressedUrl = await compressImageBase64(base64);
-
-            updatePanels(prev => prev.map(p => {
-                if (p.id === panelId) {
-                    return { ...p, subPanels: p.subPanels.map(sp => sp.id === subPanelId ? { ...sp, imageUrl: compressedUrl, prompt: `Uploaded: ${file.name}`, characterIds: [] } : sp ) };
-                }
-                return p;
-            }));
-            e.target.value = '';
-            setCurrentTarget(null);
-        }
-    };
-    
-    const handleExport = () => {
-        const element = canvasExportRef.current;
-        if (!element) return;
-        setIsExporting(true);
-        html2canvas(element, {
-            backgroundColor: '#111827', // bg-gray-900
-            scale: 2,
-        }).then((canvas) => {
-            const link = document.createElement('a');
-            link.download = `${project.title} - ${chapter.title}.png`;
-            link.href = canvas.toDataURL('image/png');
-            link.click();
-        }).finally(() => setIsExporting(false));
-    };
-
-    const toggleSelection = (id: string, state: string[], setter: React.Dispatch<React.SetStateAction<string[]>>) => setter(prev => prev.includes(id) ? prev.filter(i => i !== id) : [...prev, id]);
-    const togglePanelSelectionForAgent = (panelId: string) => { if (isAgentMode) setSelectedPanelIds(selectedPanelIds.includes(panelId) ? selectedPanelIds.filter(id => id !== panelId) : [...selectedPanelIds, panelId]); };
-    
-    const gridTemplates = useMemo(() => {
-        const templates: Record<string, React.CSSProperties> = {};
-        panels.forEach(p => {
-            templates[p.id] = { display: 'grid', gridTemplateRows: `repeat(${p.layout.length}, 1fr)`, gridTemplateColumns: `repeat(${p.layout[0].length}, 1fr)`, gap: '8px' };
-        });
-        return templates;
-    }, [panels]);
-
-    const getGridArea = (layout: number[][], subPanelIndex: number): React.CSSProperties => {
-        const panelId = subPanelIndex + 1;
-        let rS = -1, rE = -1, cS = -1, cE = -1;
-        for (let r=0; r<layout.length; r++) for (let c=0; c<layout[0].length; c++) if (layout[r][c] === panelId) { if (rS===-1) rS=r+1; if (cS===-1||c<cS) cS=c+1; rE=r+2; if(c+2>cE) cE=c+2; }
-        return { gridArea: `${rS} / ${cS} / ${rE} / ${cE}` };
-    };
-
-    return (
-        <div className="bg-gray-800/50 rounded-lg h-full flex flex-col border border-gray-700">
-            <input type="file" ref={hiddenUploadRef} onChange={handleImageUpload} className="hidden" accept="image/*" />
-            <div className="flex justify-between items-center p-4 border-b border-gray-700 flex-shrink-0">
-                <h2 className="text-xl font-bold truncate pr-4">{title}</h2>
-                <div className="flex items-center gap-2">
-                    <button onClick={() => setLayoutPickerOpen(true)} className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-purple-600 hover:bg-purple-700 font-semibold text-sm"> <PlusIcon className="w-4 h-4" /> Add Layout </button>
-                    <button onClick={handleExport} disabled={isExporting} className="flex items-center gap-2 px-3 py-1.5 rounded-md bg-cyan-600 hover:bg-cyan-700 font-semibold text-sm disabled:bg-gray-500"> {isExporting ? 'Exporting...' : <><DownloadIcon className="w-4 h-4" /> Export</>} </button>
-                </div>
-            </div>
-            
-            <div className="flex-grow overflow-y-auto p-4">
-                <div ref={canvasExportRef} className="mx-auto" style={{ width: `${settings.pageWidth}px`}}>
-                    {panels.map((p) => {
-                        const isSelected = isAgentMode && selectedPanelIds.includes(p.id);
-                        const showAgentGenerator = agentGeneratingState.active && agentGeneratingState.insertAfterId === p.id;
-                        return (
-                        <React.Fragment key={p.id}>
-                        <div className={`relative group mb-4 p-2 rounded-lg border-2 ${isAgentMode ? 'cursor-pointer' : ''} ${isSelected ? 'border-purple-500 bg-purple-900/20' : 'border-transparent'}`} style={{ marginBottom: `${settings.panelSpacing}px` }} onClick={() => togglePanelSelectionForAgent(p.id)}>
-                            <div style={gridTemplates[p.id]} className="aspect-[3/4]">
-                                {p.subPanels.map((sp, index) => (
-                                    <div key={sp.id} style={getGridArea(p.layout, index)}>
-                                        <SubPanelComponent 
-                                           subPanel={sp} 
-                                           onEditClick={() => openGenerateModal(p.id, sp.id)} 
-                                           onUploadClick={() => handleUploadClick(p.id, sp.id)} 
-                                           onDeleteContent={() => handleDeleteContent(p.id, sp.id)}
-                                           onRegenerate={() => handleRegenerate(p.id, sp.id)}
-                                           onAddBubble={() => alert('Dialogue bubbles coming soon!')}
-                                           isLoading={loadingStates[`${p.id}-${sp.id}`] || false}
-                                           isSelected={isSelected}
-                                        />
-                                    </div>
-                                ))}
-                            </div>
-                             <button onClick={(e) => { e.stopPropagation(); handleDeletePanel(p.id); }} className="absolute -top-3 -right-3 bg-red-600 p-2 rounded-full text-white opacity-0 group-hover:opacity-100 hover:bg-red-500 z-10"> <TrashIcon className="w-5 h-5"/> </button>
-                        </div>
-                        {showAgentGenerator && <AgentGeneratingPanel prompt={agentGeneratingState.prompt} />}
-                        </React.Fragment>
-                    )})}
-                    
-                    {agentGeneratingState.active && agentGeneratingState.insertAfterId === null && <AgentGeneratingPanel prompt={agentGeneratingState.prompt} />}
-
-                    {panels.length === 0 && !agentGeneratingState.active && <p className="text-center text-gray-500 py-20">Add a panel layout to get started!</p>}
-                </div>
-            </div>
-
-            <PanelLayoutPickerModal isOpen={isLayoutPickerOpen} onClose={() => setLayoutPickerOpen(false)} onSelect={handleAddLayout} />
-            <Modal isOpen={isGenerateModalOpen} onClose={resetGenerateModal} title="Generate Panel">
-                 <div className="space-y-4 max-h-[80vh] overflow-y-auto p-1">
-                    <textarea value={prompt} onChange={e => setPrompt(e.target.value)} placeholder={"Describe the panel..."} className="w-full p-3 bg-gray-700 rounded-md border border-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500" rows={4}/>
-                    
-                    {continuityOptions.length > 0 && (
-                        <div>
-                            <p className="text-sm font-semibold mb-2">Continuidad (Opcional - Selecciona 1)</p>
-                            <div className="relative p-2 bg-gray-900/50 rounded-md">
-                                <div className="flex flex-wrap gap-2 max-h-28 overflow-y-auto">
-                                {continuityOptions.map(sp => (
-                                    <img 
-                                        key={sp.id} 
-                                        src={sp.imageUrl!} 
-                                        alt="Continuity option" 
-                                        onClick={() => setContinuitySubPanelId(sp.id === continuitySubPanelId ? null : sp.id)}
-                                        className={`w-20 h-20 object-cover rounded-md cursor-pointer border-2 transition-all ${continuitySubPanelId === sp.id ? 'border-purple-500 scale-105' : 'border-transparent hover:border-gray-500'}`}
-                                    />
-                                ))}
-                                </div>
-                                {continuitySubPanelId && <div className="absolute bottom-1 right-2 text-xs text-purple-300 bg-purple-900/80 px-2 py-0.5 rounded-md">Continuity Selected</div>}
-                            </div>
-                        </div>
-                    )}
-                    
-                    {project.characters.length > 0 && (<div><p className="text-sm font-semibold mb-2">Characters:</p><div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">{project.characters.map(char => (<button key={char.id} onClick={() => toggleSelection(char.id, selectedCharIds, setSelectedCharIds)} className={`px-3 py-1 text-sm rounded-full ${selectedCharIds.includes(char.id) ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{char.name}</button>))}</div></div>)}
-
-                    {project.styleReferences.length > 0 && (<div><p className="text-sm font-semibold mb-2 mt-2">Art Style:</p><div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">{project.styleReferences.map(style => (<button key={style.id} onClick={() => toggleSelection(style.id, selectedStyleIds, setSelectedStyleIds)} className={`px-3 py-1 text-sm rounded-full ${selectedStyleIds.includes(style.id) ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{style.name}</button>))}</div></div>)}
-
-                    {project.dialogueStyles.length > 0 && (<div><p className="text-sm font-semibold mb-2 mt-2">Dialogue Style:</p><div className="flex flex-wrap gap-2 max-h-24 overflow-y-auto">{project.dialogueStyles.map(style => (<button key={style.id} onClick={() => toggleSelection(style.id, selectedDialogueStyleIds, setSelectedDialogueStyleIds)} className={`px-3 py-1 text-sm rounded-full ${selectedDialogueStyleIds.includes(style.id) ? 'bg-purple-600 text-white' : 'bg-gray-700 hover:bg-gray-600'}`}>{style.name}</button>))}</div></div>)}
-
-                    <button onClick={() => handleGenerate(false)} className="w-full bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold py-2 rounded-md hover:opacity-90 transition-opacity sticky bottom-0">Generate</button>
-                 </div>
-            </Modal>
-        </div>
-    );
+    return { rowStart, rowEnd, colStart, colEnd };
 };

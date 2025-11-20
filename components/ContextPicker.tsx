@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 // Using a generic type to handle different item structures

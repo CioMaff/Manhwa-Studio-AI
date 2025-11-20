@@ -18,6 +18,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, c
 
   const handleSave = () => {
     onSave(settings);
+    onClose();
   };
 
   const handleChange = (field: keyof Settings, value: string) => {
@@ -53,12 +54,29 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({ isOpen, onClose, c
             id="panelSpacing"
             type="range"
             min="0"
-            max="400"
-            step="10"
+            max="40"
+            step="2"
             value={settings.panelSpacing}
             onChange={(e) => handleChange('panelSpacing', e.target.value)}
             className="w-full h-2 bg-gray-700 rounded-lg appearance-none cursor-pointer"
           />
+        </div>
+        <div>
+            <label className="block text-sm font-medium text-gray-300 mb-2">
+                Concurrent Generations ({settings.maxConcurrentGenerations})
+            </label>
+            <div className="flex items-center gap-2 rounded-lg bg-gray-900/50 p-1">
+                {[1, 2, 3].map(num => (
+                    <button
+                        key={num}
+                        onClick={() => setSettings(prev => ({...prev, maxConcurrentGenerations: num}))}
+                        className={`w-full text-center py-2 rounded-md transition-colors text-sm ${settings.maxConcurrentGenerations === num ? 'bg-purple-600 text-white' : 'hover:bg-gray-700'}`}
+                    >
+                        {num} {num === 1 ? '(Max Consistency)' : num === 3 ? '(Max Speed)' : ''}
+                    </button>
+                ))}
+            </div>
+            <p className="text-xs text-gray-500 mt-1">Controls how many images are generated at the same time. Lower numbers improve consistency.</p>
         </div>
         <div className="flex justify-end gap-4 pt-4">
           <button

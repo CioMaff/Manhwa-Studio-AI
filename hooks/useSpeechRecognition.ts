@@ -23,6 +23,9 @@ interface SpeechRecognitionInstance {
 // Polyfill for browsers that might have webkitSpeechRecognition
 const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
 
+// Use a flag at the module level to ensure the warning is logged only once.
+let supportWarningLogged = false;
+
 export const useSpeechRecognition = (onResult: (transcript: string) => void) => {
   const [isListening, setIsListening] = useState(false);
   // Fix: Use SpeechRecognitionInstance as the type for the ref to fix "refers to a value" error.
@@ -33,44 +36,56 @@ export const useSpeechRecognition = (onResult: (transcript: string) => void) => 
 
   useEffect(() => {
     if (!SpeechRecognition) {
-      console.error("Speech Recognition not supported in this browser.");
+      if (!supportWarningLogged) {
+        // Use console.warn to avoid alarming developers about a known feature limitation.
+        console.warn("Speech Recognition not supported in this browser. Voice input feature will be disabled.");
+        supportWarningLogged = true;
+      }
       return;
     }
-
-    const recognition: SpeechRecognitionInstance = new SpeechRecognition();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.lang = 'es-ES';
-
-    recognition.onresult = (event) => {
-      let finalTranscript = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
-        if (event.results[i].isFinal) {
-          finalTranscript += event.results[i][0].transcript;
-        }
-      }
-      if (finalTranscript) {
-        onResult(finalTranscript);
-      }
-    };
     
-    recognition.onend = () => {
-        // Use the ref here to get the current listening state, fixing the stale closure bug.
-        if (isListeningRef.current) {
-            recognition.start(); // auto-restart if it was intentionally listening
+    try {
+        const recognition: SpeechRecognitionInstance = new SpeechRecognition();
+        recognition.continuous = true;
+        recognition.interimResults = true;
+        recognition.lang = 'es-ES';
+
+        recognition.onresult = (event) => {
+          let finalTranscript = '';
+          for (let i = event.resultIndex; i < event.results.length; ++i) {
+            if (event.results[i].isFinal) {
+              finalTranscript += event.results[i][0].transcript;
+            }
+          }
+          if (finalTranscript) {
+            onResult(finalTranscript);
+          }
+        };
+        
+        recognition.onend = () => {
+            // Use the ref here to get the current listening state, fixing the stale closure bug.
+            if (isListeningRef.current) {
+                recognition.start(); // auto-restart if it was intentionally listening
+            }
+        };
+        
+        recognition.onerror = (event) => {
+          console.error('Speech recognition error', event.error);
+          setIsListening(false);
+        };
+
+        recognitionRef.current = recognition;
+
+        return () => {
+          recognition.stop();
+        };
+    } catch(e) {
+        if (!supportWarningLogged) {
+            console.error("Speech Recognition failed to initialize.", e);
+            console.warn("Speech Recognition feature is disabled due to an error during initialization.");
+            supportWarningLogged = true;
         }
-    };
-    
-    recognition.onerror = (event) => {
-      console.error('Speech recognition error', event.error);
-      setIsListening(false);
-    };
-
-    recognitionRef.current = recognition;
-
-    return () => {
-      recognition.stop();
-    };
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [onResult]);
   

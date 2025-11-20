@@ -1,20 +1,11 @@
-
-
-import React, { useState } from 'react';
-import type { Project, Character } from '../types';
+import React, { useState, useMemo } from 'react';
+import type { Character, ObjectAsset, BackgroundAsset } from '../types';
 import { fileToBase64, textFileToString, compressImageBase64 } from '../utils/fileUtils';
-import { generateCharacterImage } from '../services/geminiService';
 import { PlusIcon } from './icons/PlusIcon';
-import { Modal } from './Modal';
-import { Loader } from './Loader';
-import { CharacterEditorModal } from './CharacterEditorModal';
 import { ImageViewerModal } from './ImageViewerModal';
 import { TrashIcon } from './icons/TrashIcon';
-
-interface AssetManagerProps {
-  project: Project;
-  updateProject: (updater: (prev: Project) => Project) => void;
-}
+import { showConfirmation, showToast } from '../systems/uiSystem';
+import { useProject } from '../contexts/ProjectContext';
 
 const Section: React.FC<{ title: string; children: React.ReactNode; onAdd?: () => void; }> = ({ title, children, onAdd }) => {
   const [isOpen, setIsOpen] = useState(true);
@@ -34,37 +25,53 @@ const Section: React.FC<{ title: string; children: React.ReactNode; onAdd?: () =
   );
 };
 
+export interface AssetManagerProps {
+  onOpenCharacterModal: (character?: Character | { referenceImage: string, description: string }) => void;
+}
 
-export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProject }) => {
-    const { characters, styleReferences, knowledgeBase, dialogueStyles } = project;
+
+export const AssetManager: React.FC<AssetManagerProps> = ({ onOpenCharacterModal }) => {
+    const { project, updateProject } = useProject();
+    const { characters, objects, backgrounds, styleReferences, knowledgeBase, dialogueStyles } = project;
     
-    const [isCharModalOpen, setCharModalOpen] = useState(false);
-    const [newCharName, setNewCharName] = useState('');
-    const [newCharDesc, setNewCharDesc] = useState('');
-    const [newCharImgBase64, setNewCharImgBase64] = useState<string | null>(null);
-    
-    const [isLoading, setIsLoading] = useState(false);
-    const [loadingMessage, setLoadingMessage] = useState('');
-    
-    const [editingCharacter, setEditingCharacter] = useState<Character | null>(null);
     const [viewingImage, setViewingImage] = useState<string | null>(null);
-
-    const handleAddStyleRef = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const file = e.target.files[0];
-            const base64 = await fileToBase64(file);
-            const compressed = await compressImageBase64(base64);
-            updateProject(p => ({ ...p, styleReferences: [...p.styleReferences, { id: Date.now().toString(), name: file.name, image: compressed }]}));
-            e.target.value = ''; // Reset input
+    
+    const groupedObjects = useMemo(() => {
+        const groups: Record<string, ObjectAsset[]> = {};
+        objects.forEach(obj => {
+            const ownerName = obj.ownerInfo?.name || 'Various';
+            if (!groups[ownerName]) {
+                groups[ownerName] = [];
+            }
+            groups[ownerName].push(obj);
+        });
+        if (groups['Various']) {
+            const various = groups['Various'];
+            delete groups['Various'];
+            groups['Various'] = various;
         }
-    };
+        return groups;
+    }, [objects]);
 
-     const handleAddDialogueStyle = async (e: React.ChangeEvent<HTMLInputElement>) => {
+
+    const handleAddAsset = async (e: React.ChangeEvent<HTMLInputElement>, type: 'style' | 'dialogue' | 'object' | 'background') => {
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
             const base64 = await fileToBase64(file);
             const compressed = await compressImageBase64(base64);
-            updateProject(p => ({ ...p, dialogueStyles: [...p.dialogueStyles, { id: Date.now().toString(), name: file.name, image: compressed }]}));
+            
+            if (type === 'object') {
+                 const newAsset: ObjectAsset = { id: Date.now().toString(), name: file.name, image: compressed, ownerInfo: { type: 'various', name: 'Various' } };
+                 updateProject(p => ({ ...p, objects: [...p.objects, newAsset]}));
+            } else {
+                const newAsset = { id: Date.now().toString(), name: file.name, image: compressed };
+                updateProject(p => {
+                    if (type === 'style') return { ...p, styleReferences: [...p.styleReferences, newAsset]};
+                    if (type === 'dialogue') return { ...p, dialogueStyles: [...p.dialogueStyles, newAsset]};
+                    if (type === 'background') return { ...p, backgrounds: [...p.backgrounds, newAsset] };
+                    return p;
+                });
+            }
             e.target.value = ''; // Reset input
         }
     };
@@ -73,7 +80,7 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProje
         if (e.target.files && e.target.files[0]) {
             const file = e.target.files[0];
             if (file.type === "application/pdf") {
-                 alert("PDF parsing is not fully supported. The file name will be used as context for now.");
+                 showToast("PDF parsing is not fully supported.", "info");
                  updateProject(p => ({...p, knowledgeBase: [...p.knowledgeBase, { id: Date.now().toString(), name: file.name, content: `PDF file: ${file.name}` }]}));
             } else {
                 const content = await textFileToString(file);
@@ -83,8 +90,12 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProje
         }
     };
     
-    const handleDelete = (type: 'character' | 'style' | 'knowledge' | 'dialogue', id: string) => {
-        if (window.confirm(`Are you sure you want to delete this ${type}?`)) {
+    const handleDelete = async (type: 'character' | 'style' | 'knowledge' | 'dialogue' | 'object' | 'background', id: string) => {
+        const confirmed = await showConfirmation({
+            title: `Delete ${type}`,
+            message: `Are you sure you want to delete this ${type}? This cannot be undone.`
+        });
+        if (confirmed) {
             updateProject(p => {
                 const newState = { ...p };
                 switch (type) {
@@ -100,73 +111,26 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProje
                     case 'dialogue':
                         newState.dialogueStyles = p.dialogueStyles.filter(i => i.id !== id);
                         break;
+                    case 'object':
+                        newState.objects = p.objects.filter(i => i.id !== id);
+                        break;
+                    case 'background':
+                        newState.backgrounds = p.backgrounds.filter(i => i.id !== id);
+                        break;
                     default:
-                        // This should not happen, but it's good practice
                         return p;
                 }
                 return newState;
             });
         }
     };
-    
-    const handleCharacterImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-        if (e.target.files && e.target.files[0]) {
-            const file = e.target.files[0];
-            const base64 = await fileToBase64(file);
-            setNewCharImgBase64(base64);
-        }
-    };
-
-    const handleCreateCharacter = (useDirectImage: boolean) => {
-        if (!newCharName.trim() || !newCharImgBase64) {
-            alert("Please provide a name and a reference image.");
-            return;
-        }
-        
-        if (useDirectImage) {
-            compressImageBase64(newCharImgBase64).then(compressed => {
-                updateProject(p => ({ ...p, characters: [...p.characters, { id: Date.now().toString(), name: newCharName, description: newCharDesc, referenceImage: compressed }] }));
-                resetCharModal();
-            });
-        } else {
-            setIsLoading(true);
-            setLoadingMessage("Generating 360° Character Sheet...");
-            generateCharacterImage(newCharDesc, newCharImgBase64)
-                .then(compressImageBase64)
-                .then(compressedImage => {
-                    updateProject(p => ({ ...p, characters: [...p.characters, { id: Date.now().toString(), name: newCharName, description: newCharDesc, referenceImage: compressedImage }] }));
-                    resetCharModal();
-                })
-                .catch(error => {
-                    console.error("Failed to create character:", error);
-                    alert(`Failed to generate character sheet. Error: ${(error as Error).message || 'Unknown error'}`);
-                })
-                .finally(() => setIsLoading(false));
-        }
-    };
-    
-    const handleSaveEditedCharacter = (editedChar: Character) => {
-        updateProject(p => ({
-            ...p,
-            characters: p.characters.map(c => c.id === editedChar.id ? editedChar : c)
-        }));
-        setEditingCharacter(null);
-    };
-
-    const resetCharModal = () => {
-        setCharModalOpen(false);
-        setNewCharName('');
-        setNewCharDesc('');
-        setNewCharImgBase64(null);
-    };
 
     return (
         <div className="h-full overflow-y-auto pr-2">
-            {isLoading && <Loader message={loadingMessage} />}
-            <Section title="Characters" onAdd={() => setCharModalOpen(true)}>
+            <Section title="Characters" onAdd={() => onOpenCharacterModal()}>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {characters.map(char => (
-                        <div key={char.id} className="text-center group relative cursor-pointer aspect-square" onClick={() => setEditingCharacter(char)}>
+                        <div key={char.id} className="text-center group relative cursor-pointer aspect-square" onClick={() => onOpenCharacterModal(char)}>
                             <img src={char.referenceImage} alt={char.name} className="rounded-md w-full h-full object-cover" />
                             <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-1">
                                 <p className="text-sm truncate text-white">{char.name}</p>
@@ -178,7 +142,7 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProje
             </Section>
 
             <Section title="Style References" onAdd={() => document.getElementById('style-ref-upload')?.click()}>
-                <input type="file" id="style-ref-upload" className="hidden" accept="image/*" onChange={handleAddStyleRef} />
+                <input type="file" id="style-ref-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'style')} />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {styleReferences.map(ref => (
                         <div key={ref.id} className="relative group cursor-pointer" onClick={() => setViewingImage(ref.image)}>
@@ -191,9 +155,47 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProje
                 </div>
                 {styleReferences.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Add style references.</p>}
             </Section>
+            
+            <Section title="Objects" onAdd={() => document.getElementById('object-upload')?.click()}>
+                <input type="file" id="object-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'object')} />
+                 <div className="space-y-3">
+                    {Object.entries(groupedObjects).map(([ownerName, ownerObjects]) => (
+                        <details key={ownerName} open className="bg-gray-700/30 rounded-md p-2">
+                            <summary className="text-sm font-semibold text-purple-300 cursor-pointer list-item">{ownerName}</summary>
+                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2">
+                                {(ownerObjects as ObjectAsset[]).map(ref => (
+                                    <div key={ref.id} className="relative group cursor-pointer" onClick={() => setViewingImage(ref.image)}>
+                                        <img src={ref.image} alt={ref.name} className="rounded-md aspect-square object-cover" />
+                                        <p className="absolute bottom-0 left-0 right-0 bg-black/70 p-1 text-xs truncate text-center text-white">{ref.name}</p>
+                                        <button onClick={(e) => { e.stopPropagation(); handleDelete('object', ref.id);}} className="absolute top-1 right-1 bg-red-600/70 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500">
+                                            <TrashIcon className="w-3 h-3"/>
+                                        </button>
+                                    </div>
+                                ))}
+                            </div>
+                        </details>
+                    ))}
+                </div>
+                {objects.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Add important objects.</p>}
+            </Section>
+
+            <Section title="Backgrounds / Scenarios" onAdd={() => document.getElementById('background-upload')?.click()}>
+                <input type="file" id="background-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'background')} />
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                    {backgrounds.map(ref => (
+                        <div key={ref.id} className="relative group cursor-pointer" onClick={() => setViewingImage(ref.image)}>
+                            <img src={ref.image} alt={ref.name} className="rounded-md aspect-square object-cover" />
+                             <button onClick={(e) => { e.stopPropagation(); handleDelete('background', ref.id);}} className="absolute top-1 right-1 bg-red-600/70 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500">
+                                <TrashIcon className="w-3 h-3"/>
+                            </button>
+                        </div>
+                    ))}
+                </div>
+                {backgrounds.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Add scene backgrounds.</p>}
+            </Section>
 
              <Section title="Dialogue Styles" onAdd={() => document.getElementById('dialogue-style-upload')?.click()}>
-                <input type="file" id="dialogue-style-upload" className="hidden" accept="image/*" onChange={handleAddDialogueStyle} />
+                <input type="file" id="dialogue-style-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'dialogue')} />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {dialogueStyles.map(ref => (
                         <div key={ref.id} className="relative group cursor-pointer" onClick={() => setViewingImage(ref.image)}>
@@ -221,44 +223,6 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ project, updateProje
                 </ul>
                  {knowledgeBase.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Upload .txt or .pdf story files.</p>}
             </Section>
-
-            <Modal isOpen={isCharModalOpen} onClose={resetCharModal} title="Add New Character">
-                <div className="space-y-4">
-                    <input type="text" placeholder="Character Name" value={newCharName} onChange={e => setNewCharName(e.target.value)} className="w-full p-2 bg-gray-700 rounded-md border border-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500" />
-                    <textarea placeholder="Character Description" value={newCharDesc} onChange={e => setNewCharDesc(e.target.value)} className="w-full p-2 bg-gray-700 rounded-md border border-gray-600 focus:outline-none focus:ring-2 focus:ring-purple-500" rows={3}></textarea>
-                    
-                    {!newCharImgBase64 && <input type="file" accept="image/*" onChange={handleCharacterImageUpload} className="w-full text-sm text-gray-400 file:mr-4 file:py-2 file:px-4 file:rounded-full file:border-0 file:text-sm file:font-semibold file:bg-purple-600 file:text-white hover:file:bg-purple-700" />}
-                    
-                    {newCharImgBase64 && (
-                        <div className="text-center space-y-3">
-                            <p className="text-sm text-gray-300">Reference image loaded:</p>
-                            <img src={newCharImgBase64} alt="Character Reference" className="max-h-40 mx-auto rounded-md" />
-                            <p className="text-sm text-gray-400">How do you want to use this image?</p>
-                            <div className="flex gap-4">
-                               <button onClick={() => handleCreateCharacter(true)} className="flex-1 bg-gray-600 text-white font-bold py-2 px-4 rounded-md hover:bg-gray-500 transition-colors">
-                                    Use Directly
-                                </button>
-                                <button onClick={() => handleCreateCharacter(false)} className="flex-1 bg-gradient-to-r from-purple-600 to-blue-600 text-white font-bold py-2 px-4 rounded-md hover:opacity-90 transition-opacity">
-                                    Generate 360° Sheet
-                                </button>
-                            </div>
-                        </div>
-                    )}
-                </div>
-            </Modal>
-            
-            {editingCharacter && (
-                <CharacterEditorModal 
-                    isOpen={!!editingCharacter}
-                    onClose={() => setEditingCharacter(null)}
-                    character={editingCharacter}
-                    onSave={handleSaveEditedCharacter}
-                    onDelete={(id) => {
-                        handleDelete('character', id);
-                        setEditingCharacter(null);
-                    }}
-                />
-            )}
             
             {viewingImage && (
                 <ImageViewerModal 

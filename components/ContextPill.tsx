@@ -1,4 +1,3 @@
-
 import React from 'react';
 import type { ContextPillItem } from '../types';
 
@@ -12,6 +11,7 @@ export const ContextPill: React.FC<ContextPillProps> = ({ item, onRemove }) => {
     switch (item.type) {
       case 'character': return 'bg-blue-500/30 text-blue-300 border-blue-500';
       case 'style': return 'bg-green-500/30 text-green-300 border-green-500';
+      case 'object': return 'bg-orange-500/30 text-orange-300 border-orange-500';
       case 'dialogue': return 'bg-yellow-500/30 text-yellow-300 border-yellow-500';
       case 'knowledge': return 'bg-gray-500/30 text-gray-300 border-gray-500';
       default: return 'bg-gray-600';

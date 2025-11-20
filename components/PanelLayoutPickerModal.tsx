@@ -1,23 +1,12 @@
 import React from 'react';
 import { Modal } from './Modal';
+import { layouts as layoutData } from './layouts';
 
 interface PanelLayoutPickerModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelect: (layout: number[][]) => void;
 }
-
-const layouts = [
-  { name: '1 Panel', grid: [[1]] },
-  { name: '2 Panels (Vertical)', grid: [[1], [2]] },
-  { name: '2 Panels (Horizontal)', grid: [[1, 2]] },
-  { name: '3 Panels (Vertical)', grid: [[1], [2], [3]] },
-  { name: '3 Panels (Stacked)', grid: [[1], [2, 3]] },
-  { name: '3 Panels (Featured)', grid: [[1, 1], [2, 3]] },
-  { name: '4 Panels (Grid)', grid: [[1, 2], [3, 4]] },
-  { name: '4 Panels (Featured)', grid: [[1, 1], [2, 3], [2, 4]] },
-  { name: '5 Panels (Complex)', grid: [[1, 1, 2], [3, 4, 2], [5, 5, 5]] },
-];
 
 const LayoutPreview: React.FC<{ layout: number[][], onClick: () => void }> = ({ layout, onClick }) => {
     const numRows = layout.length;
@@ -50,6 +39,19 @@ const LayoutPreview: React.FC<{ layout: number[][], onClick: () => void }> = ({ 
     );
 };
 
+const layouts = [
+    { name: '1 Panel', id: '1', grid: layoutData['1'] },
+    { name: '2 Vertical', id: '2v', grid: layoutData['2v'] },
+    { name: '2 Horizontal', id: '2h', grid: layoutData['2h'] },
+    { name: '3 Vertical', id: '3v', grid: layoutData['3v'] },
+    { name: '3 Horizontal', id: '3h', grid: layoutData['3h'] },
+    { name: '4 Grid', id: '4g', grid: layoutData['4g'] },
+    { name: 'L-Shape', id: 'l-shape', grid: layoutData['l-shape'] },
+    { name: 'Reverse L', id: 'reverse-l', grid: layoutData['reverse-l'] },
+    { name: '1 Top, 3 Bottom', id: '1-top-3-bottom', grid: layoutData['1-top-3-bottom']},
+    { name: '1 Left, 3 Right', id: '1-left-3-right', grid: layoutData['1-left-3-right']},
+    { name: 'Complex 5', id: 'complex-5', grid: layoutData['complex-5']},
+];
 
 export const PanelLayoutPickerModal: React.FC<PanelLayoutPickerModalProps> = ({ isOpen, onClose, onSelect }) => {
   return (

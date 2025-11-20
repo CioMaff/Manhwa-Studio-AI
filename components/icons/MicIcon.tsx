@@ -1,4 +1,3 @@
-
 import React from 'react';
 
 export const MicIcon = ({ className = "w-6 h-6" }: { className?: string }) => (
