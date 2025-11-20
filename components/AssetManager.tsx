@@ -10,17 +10,20 @@ import { useProject } from '../contexts/ProjectContext';
 const Section: React.FC<{ title: string; children: React.ReactNode; onAdd?: () => void; }> = ({ title, children, onAdd }) => {
   const [isOpen, setIsOpen] = useState(true);
   return (
-    <div className="bg-gray-800/50 rounded-lg border border-gray-700 mb-4">
-      <div className="p-3 flex justify-between items-center cursor-pointer" onClick={() => setIsOpen(!isOpen)}>
-        <h3 className="text-lg font-semibold text-gray-200">{title}</h3>
+    <div className="mb-3">
+      <div 
+        className={`flex justify-between items-center p-3 cursor-pointer rounded-lg transition-all ${isOpen ? 'bg-white/5' : 'hover:bg-white/5'}`} 
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-wider">{title}</h3>
         <div className="flex items-center gap-2">
-            {onAdd && <button onClick={(e) => { e.stopPropagation(); onAdd(); }} className="p-1 rounded-full hover:bg-purple-500/20 text-purple-400 hover:text-purple-300 transition-all">
-                <PlusIcon className="w-5 h-5" />
+            {onAdd && <button onClick={(e) => { e.stopPropagation(); onAdd(); }} className="p-1 rounded-full bg-white/5 hover:bg-violet-600 text-gray-400 hover:text-white transition-all">
+                <PlusIcon className="w-3.5 h-3.5" />
             </button>}
-            <span className={`transform transition-transform ${isOpen ? 'rotate-180' : ''}`}>▼</span>
+            <span className={`transform transition-transform text-gray-600 ${isOpen ? 'rotate-180' : ''}`}>▼</span>
         </div>
       </div>
-      {isOpen && <div className="p-3 border-t border-gray-700">{children}</div>}
+      {isOpen && <div className="p-2 animate-fade-in-up">{children}</div>}
     </div>
   );
 };
@@ -126,102 +129,107 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ onOpenCharacterModal
     };
 
     return (
-        <div className="h-full overflow-y-auto pr-2">
+        <div className="h-full overflow-y-auto pr-1 custom-scrollbar pt-2">
             <Section title="Characters" onAdd={() => onOpenCharacterModal()}>
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {characters.map(char => (
-                        <div key={char.id} className="text-center group relative cursor-pointer aspect-square" onClick={() => onOpenCharacterModal(char)}>
-                            <img src={char.referenceImage} alt={char.name} className="rounded-md w-full h-full object-cover" />
-                            <div className="absolute bottom-0 left-0 right-0 bg-black/70 p-1">
-                                <p className="text-sm truncate text-white">{char.name}</p>
+                        <div key={char.id} className="text-center group relative cursor-pointer aspect-[3/4] rounded-lg overflow-hidden border border-white/5 hover:border-violet-500/50 transition-all hover:scale-[1.02]" onClick={() => onOpenCharacterModal(char)}>
+                            <img src={char.referenceImage} alt={char.name} className="w-full h-full object-cover" />
+                            <div className="absolute inset-0 bg-gradient-to-t from-black/90 via-transparent to-transparent opacity-80" />
+                            <div className="absolute bottom-0 left-0 right-0 p-2">
+                                <p className="text-xs font-semibold truncate text-white drop-shadow-md">{char.name}</p>
                             </div>
                         </div>
                     ))}
                 </div>
-                 {characters.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Add your first character.</p>}
+                 {characters.length === 0 && <p className="text-gray-500 text-xs text-center py-4 italic">No characters yet.</p>}
             </Section>
 
             <Section title="Style References" onAdd={() => document.getElementById('style-ref-upload')?.click()}>
                 <input type="file" id="style-ref-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'style')} />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {styleReferences.map(ref => (
-                        <div key={ref.id} className="relative group cursor-pointer" onClick={() => setViewingImage(ref.image)}>
-                            <img src={ref.image} alt={ref.name} className="rounded-md aspect-square object-cover" />
-                             <button onClick={(e) => { e.stopPropagation(); handleDelete('style', ref.id);}} className="absolute top-1 right-1 bg-red-600/70 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500">
+                        <div key={ref.id} className="relative group cursor-pointer aspect-square rounded-lg overflow-hidden border border-white/5 hover:border-green-500/50 transition-all" onClick={() => setViewingImage(ref.image)}>
+                            <img src={ref.image} alt={ref.name} className="w-full h-full object-cover transition-transform group-hover:scale-110" />
+                             <button onClick={(e) => { e.stopPropagation(); handleDelete('style', ref.id);}} className="absolute top-1 right-1 bg-red-600/80 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500 backdrop-blur-sm">
                                 <TrashIcon className="w-3 h-3"/>
                             </button>
                         </div>
                     ))}
                 </div>
-                {styleReferences.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Add style references.</p>}
+                {styleReferences.length === 0 && <p className="text-gray-500 text-xs text-center py-4 italic">No styles.</p>}
             </Section>
             
             <Section title="Objects" onAdd={() => document.getElementById('object-upload')?.click()}>
                 <input type="file" id="object-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'object')} />
-                 <div className="space-y-3">
+                 <div className="space-y-2">
                     {Object.entries(groupedObjects).map(([ownerName, ownerObjects]) => (
-                        <details key={ownerName} open className="bg-gray-700/30 rounded-md p-2">
-                            <summary className="text-sm font-semibold text-purple-300 cursor-pointer list-item">{ownerName}</summary>
-                            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2 pt-2">
+                        <div key={ownerName} className="bg-white/5 rounded-lg p-2">
+                            <h4 className="text-[10px] font-bold text-violet-300 mb-2 uppercase">{ownerName}</h4>
+                            <div className="grid grid-cols-3 gap-2">
                                 {(ownerObjects as ObjectAsset[]).map(ref => (
-                                    <div key={ref.id} className="relative group cursor-pointer" onClick={() => setViewingImage(ref.image)}>
-                                        <img src={ref.image} alt={ref.name} className="rounded-md aspect-square object-cover" />
-                                        <p className="absolute bottom-0 left-0 right-0 bg-black/70 p-1 text-xs truncate text-center text-white">{ref.name}</p>
-                                        <button onClick={(e) => { e.stopPropagation(); handleDelete('object', ref.id);}} className="absolute top-1 right-1 bg-red-600/70 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500">
-                                            <TrashIcon className="w-3 h-3"/>
-                                        </button>
+                                    <div key={ref.id} className="relative group cursor-pointer aspect-square rounded-md overflow-hidden border border-white/5 hover:border-orange-500/50 transition-all" onClick={() => setViewingImage(ref.image)}>
+                                        <img src={ref.image} alt={ref.name} className="w-full h-full object-cover" />
+                                        <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                                            <button onClick={(e) => { e.stopPropagation(); handleDelete('object', ref.id);}} className="text-red-400 hover:text-red-300">
+                                                <TrashIcon className="w-4 h-4"/>
+                                            </button>
+                                        </div>
                                     </div>
                                 ))}
                             </div>
-                        </details>
+                        </div>
                     ))}
                 </div>
-                {objects.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Add important objects.</p>}
+                {objects.length === 0 && <p className="text-gray-500 text-xs text-center py-4 italic">No objects.</p>}
             </Section>
 
-            <Section title="Backgrounds / Scenarios" onAdd={() => document.getElementById('background-upload')?.click()}>
+            <Section title="Backgrounds" onAdd={() => document.getElementById('background-upload')?.click()}>
                 <input type="file" id="background-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'background')} />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {backgrounds.map(ref => (
-                        <div key={ref.id} className="relative group cursor-pointer" onClick={() => setViewingImage(ref.image)}>
-                            <img src={ref.image} alt={ref.name} className="rounded-md aspect-square object-cover" />
-                             <button onClick={(e) => { e.stopPropagation(); handleDelete('background', ref.id);}} className="absolute top-1 right-1 bg-red-600/70 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500">
+                        <div key={ref.id} className="relative group cursor-pointer aspect-video rounded-lg overflow-hidden border border-white/5 hover:border-blue-500/50 transition-all" onClick={() => setViewingImage(ref.image)}>
+                            <img src={ref.image} alt={ref.name} className="w-full h-full object-cover" />
+                             <button onClick={(e) => { e.stopPropagation(); handleDelete('background', ref.id);}} className="absolute top-1 right-1 bg-red-600/80 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500 backdrop-blur-sm">
                                 <TrashIcon className="w-3 h-3"/>
                             </button>
                         </div>
                     ))}
                 </div>
-                {backgrounds.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Add scene backgrounds.</p>}
+                {backgrounds.length === 0 && <p className="text-gray-500 text-xs text-center py-4 italic">No backgrounds.</p>}
             </Section>
 
              <Section title="Dialogue Styles" onAdd={() => document.getElementById('dialogue-style-upload')?.click()}>
                 <input type="file" id="dialogue-style-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'dialogue')} />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {dialogueStyles.map(ref => (
-                        <div key={ref.id} className="relative group cursor-pointer" onClick={() => setViewingImage(ref.image)}>
-                            <img src={ref.image} alt={ref.name} className="rounded-md aspect-square object-cover" />
-                             <button onClick={(e) => { e.stopPropagation(); handleDelete('dialogue', ref.id);}} className="absolute top-1 right-1 bg-red-600/70 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500">
+                        <div key={ref.id} className="relative group cursor-pointer aspect-video bg-gray-800 rounded-lg overflow-hidden border border-white/5 hover:border-yellow-500/50 transition-all" onClick={() => setViewingImage(ref.image)}>
+                            <img src={ref.image} alt={ref.name} className="w-full h-full object-contain p-1" />
+                             <button onClick={(e) => { e.stopPropagation(); handleDelete('dialogue', ref.id);}} className="absolute top-1 right-1 bg-red-600/80 p-1 rounded-full text-white opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500 backdrop-blur-sm">
                                 <TrashIcon className="w-3 h-3"/>
                             </button>
                         </div>
                     ))}
                 </div>
-                {dialogueStyles.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Add dialogue style references.</p>}
+                {dialogueStyles.length === 0 && <p className="text-gray-500 text-xs text-center py-4 italic">No styles.</p>}
             </Section>
 
             <Section title="Knowledge Base" onAdd={() => document.getElementById('knowledge-upload')?.click()}>
                  <input type="file" id="knowledge-upload" className="hidden" accept=".txt,.pdf" onChange={handleAddKnowledgeFile} />
                 <ul className="space-y-1">
                     {knowledgeBase.map(file => (
-                        <li key={file.id} className="text-sm text-gray-300 bg-gray-700/50 p-2 rounded-md flex justify-between items-center">
-                            <span className="truncate pr-2">{file.name}</span>
-                            <button onClick={() => handleDelete('knowledge', file.id)} className="text-red-400 hover:text-red-300 flex-shrink-0">
-                                <TrashIcon className="w-4 h-4" />
+                        <li key={file.id} className="text-xs text-gray-300 bg-white/5 hover:bg-white/10 transition-colors p-2 rounded-md flex justify-between items-center group border border-white/5">
+                            <div className="flex items-center gap-2 overflow-hidden">
+                                <span className="text-gray-500">📄</span>
+                                <span className="truncate">{file.name}</span>
+                            </div>
+                            <button onClick={() => handleDelete('knowledge', file.id)} className="text-red-400 hover:text-red-300 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <TrashIcon className="w-3.5 h-3.5" />
                             </button>
                         </li>
                     ))}
                 </ul>
-                 {knowledgeBase.length === 0 && <p className="text-gray-400 text-sm text-center py-4">Upload .txt or .pdf story files.</p>}
+                 {knowledgeBase.length === 0 && <p className="text-gray-500 text-xs text-center py-4 italic">No documents.</p>}
             </Section>
             
             {viewingImage && (

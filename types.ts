@@ -1,3 +1,4 @@
+
 export interface SubPanel {
   id: string;
   prompt: string;
@@ -141,6 +142,8 @@ export interface Project {
   settings: Settings;
   agentHistory: ChatMessage[];
   chatHistory: ChatMessage[];
+  // Internal state for the App routing
+  viewMode?: 'dashboard' | 'landing' | 'editor' | 'reader'; 
 }
 
 export interface SubPanelPlan {

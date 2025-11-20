@@ -451,30 +451,34 @@ export const Canvas: React.FC<CanvasProps> = ({
     }, [chapter.title]);
 
     return (
-        <div className="h-full bg-gray-900 overflow-y-auto text-white p-4">
-            <div className="flex justify-between items-center mb-4 sticky top-0 bg-gray-900/80 backdrop-blur-sm z-30 p-2 rounded-lg">
-                <button onClick={handleDownloadChapter} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-cyan-600 rounded-md hover:opacity-90 transition-opacity">
-                    <DownloadIcon className="w-4 h-4" /> Download Chapter
+        <div className="h-full overflow-y-auto text-white p-4 pt-24 scroll-smooth">
+            <div className="fixed top-6 left-1/2 transform -translate-x-1/2 z-30 bg-zinc-800/80 backdrop-blur-xl border border-white/10 p-1.5 rounded-full shadow-2xl flex items-center gap-2">
+                <button onClick={handleDownloadChapter} className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-zinc-700 hover:bg-zinc-600 rounded-full transition-all hover:scale-105">
+                    <DownloadIcon className="w-3.5 h-3.5" /> Download
                 </button>
-                <button onClick={() => setScenePlannerOpen(true)} className="flex items-center gap-2 px-4 py-2 text-sm font-semibold text-white bg-gradient-to-r from-purple-600 to-blue-600 rounded-md hover:opacity-90 transition-opacity">
-                    <MagicWandIcon className="w-4 h-4" /> Plan Scene with AI
+                <div className="w-px h-6 bg-white/10"></div>
+                <button onClick={() => setScenePlannerOpen(true)} className="flex items-center gap-2 px-5 py-2 text-xs font-bold text-white bg-gradient-to-r from-violet-600 to-indigo-600 rounded-full hover:shadow-lg hover:shadow-violet-500/30 transition-all hover:scale-105">
+                    <MagicWandIcon className="w-3.5 h-3.5" /> Plan Scene with AI
                 </button>
             </div>
             
             {chapter.panels.length === 0 && (
-                <div className="text-center text-gray-500 pt-10">
-                    <p>This chapter is empty.</p>
-                    <button onClick={() => { setInsertAfterPanelId(null); setLayoutPickerOpen(true); }} className="mt-4 flex items-center gap-2 mx-auto px-4 py-2 text-sm font-semibold text-white bg-purple-600 rounded-md hover:bg-purple-700">
-                        <PlusIcon className="w-4 h-4"/> Add First Panel
+                <div className="flex flex-col items-center justify-center h-[60vh] text-center">
+                    <div className="w-16 h-16 bg-white/5 rounded-full flex items-center justify-center mb-4 animate-pulse">
+                        <PlusIcon className="w-6 h-6 text-gray-500" />
+                    </div>
+                    <p className="text-gray-400 mb-4 font-medium">This chapter is empty.</p>
+                    <button onClick={() => { setInsertAfterPanelId(null); setLayoutPickerOpen(true); }} className="flex items-center gap-2 px-6 py-3 text-sm font-bold text-white bg-violet-600 rounded-full hover:bg-violet-500 shadow-lg transition-all hover:scale-105">
+                        Start Creating
                     </button>
                 </div>
             )}
             
             {chapter.panels.length > 0 && (
-                <div ref={panelContainerRef} className="flex flex-col items-center" style={{ gap: `${project.settings.panelSpacing}px` }}>
+                <div ref={panelContainerRef} className="flex flex-col items-center pb-20" style={{ gap: `${project.settings.panelSpacing}px` }}>
                     {chapter.panels.map((panel, panelIndex) => (
-                        <div key={panel.id} className="panel-container group relative w-full" style={{ maxWidth: `${project.settings.pageWidth}px` }}>
-                             <div className="relative bg-gray-900" style={{ display: 'grid', gridTemplateRows: `repeat(${panel.layout.length}, 1fr)`, gridTemplateColumns: `repeat(${panel.layout[0].length}, 1fr)`, gap: `${project.settings.panelSpacing}px`, aspectRatio: `${panel.layout[0].length / panel.layout.length}` }}>
+                        <div key={panel.id} className="panel-container group relative w-full transition-all duration-300 hover:z-10" style={{ maxWidth: `${project.settings.pageWidth}px` }}>
+                             <div className="relative bg-black rounded-sm overflow-hidden shadow-2xl ring-1 ring-white/5 group-hover:ring-violet-500/30 transition-all" style={{ display: 'grid', gridTemplateRows: `repeat(${panel.layout.length}, 1fr)`, gridTemplateColumns: `repeat(${panel.layout[0].length}, 1fr)`, gap: `${project.settings.panelSpacing}px`, aspectRatio: `${panel.layout[0].length / panel.layout.length}` }}>
                                 {panel.subPanels.map(sp => {
                                     const { rowStart, rowEnd, colStart, colEnd } = getGridArea(panel.layout, sp.id);
                                     const isLoading = loadingIds.includes(sp.id);
@@ -517,10 +521,11 @@ export const Canvas: React.FC<CanvasProps> = ({
                                 ))}
                             </div>
                             
-                            <div className="absolute -bottom-8 left-0 right-0 flex justify-center items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-900/70 backdrop-blur-sm p-1 rounded-full">
-                                <button onClick={() => movePanel(panel.id, 'up')} disabled={panelIndex === 0} className="p-1 rounded-full bg-gray-800/80 hover:bg-gray-700 disabled:opacity-30"><ArrowUpIcon className="w-4 h-4"/></button>
-                                <button onClick={() => handleDeletePanel(panel.id)} className="p-1 rounded-full bg-gray-800/80 text-red-400 hover:bg-red-500/20"><TrashIcon className="w-4 h-4"/></button>
-                                <button onClick={() => { setInsertAfterPanelId(panel.id); setLayoutPickerOpen(true);}} className="p-1 rounded-full bg-gray-800/80 text-purple-400 hover:bg-purple-500/20"><PlusIcon className="w-4 h-4"/></button>
+                            <div className="absolute -right-12 top-1/2 transform -translate-y-1/2 flex flex-col gap-2 opacity-0 group-hover:opacity-100 transition-all translate-x-2 group-hover:translate-x-0">
+                                <button onClick={() => movePanel(panel.id, 'up')} disabled={panelIndex === 0} className="p-2 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-gray-400 hover:text-white disabled:opacity-30 shadow-lg backdrop-blur-sm"><ArrowUpIcon className="w-4 h-4"/></button>
+                                <button onClick={() => { setInsertAfterPanelId(panel.id); setLayoutPickerOpen(true);}} className="p-2 rounded-full bg-zinc-800/80 hover:bg-violet-600 text-gray-400 hover:text-white shadow-lg backdrop-blur-sm"><PlusIcon className="w-4 h-4"/></button>
+                                <button onClick={() => handleDeletePanel(panel.id)} className="p-2 rounded-full bg-zinc-800/80 hover:bg-red-600 text-gray-400 hover:text-white shadow-lg backdrop-blur-sm"><TrashIcon className="w-4 h-4"/></button>
+                                <button onClick={() => movePanel(panel.id, 'down')} className="p-2 rounded-full bg-zinc-800/80 hover:bg-zinc-700 text-gray-400 hover:text-white disabled:opacity-30 shadow-lg backdrop-blur-sm"><ArrowDownIcon className="w-4 h-4"/></button>
                             </div>
                         </div>
                     ))}

@@ -32,14 +32,15 @@ import { PhotoIcon } from './icons/PhotoIcon';
 import { AssistantIcon } from './icons/AssistantIcon';
 import { DownloadIcon } from './icons/DownloadIcon';
 
-const APP_VERSION = '1.9.1'; 
+const APP_VERSION = '2.0.0'; 
 
 interface StudioProps {
     username: string;
     setProjectTitle: (title: string) => void;
+    onExit: () => void; 
 }
 
-export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => {
+export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle, onExit }) => {
     const { project, updateProject } = useProject();
     const [activeChapterId, setActiveChapterId] = useState(() => project.chapters[0]?.id || null);
     const [isCoverModalOpen, setCoverModalOpen] = useState(false);
@@ -56,7 +57,6 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
     const [isWhatsNewOpen, setIsWhatsNewOpen] = useState(false);
     const [editingCharacter, setEditingCharacter] = useState<Character | (Omit<Character, 'id' | 'name'> & { name?: string }) | null>(null);
     const [isLoading, setIsLoading] = useState(false);
-    const [isEditingTitle, setIsEditingTitle] = useState(false);
     const [editingChapterId, setEditingChapterId] = useState<string | null>(null);
     const [extractingAsset, setExtractingAsset] = useState<{ subPanel: SubPanel } | null>(null);
     const [characterSelection, setCharacterSelection] = useState<{ subPanel: SubPanel, characters: CharacterInPanel[] } | null>(null);
@@ -67,7 +67,6 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
     const coverArtRef = useRef<HTMLButtonElement>(null);
 
     useEffect(() => {
-        // Automatically update version but do NOT open modal unless explicitly requested
         localStorage.setItem('gemini-manhwa-version', APP_VERSION);
     }, []);
 
@@ -114,7 +113,7 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
             showToast("Cover art generated successfully!", 'success');
         } catch (e) {
             console.error(e);
-            showToast("Failed to generate cover art. Check network or permissions.", 'error');
+            showToast("Failed to generate cover art.", 'error');
         } finally {
             setIsCoverLoading(false);
         }
@@ -216,7 +215,7 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
             const isCharacter = prompt.toLowerCase().includes('character') || project.characters.some(c => prompt.toLowerCase().includes(c.name.toLowerCase()));
             const assetType = isCharacter ? 'character' : 'object';
 
-            showToast(`Nano is extracting '${prompt}'...`, 'info');
+            showToast(`Extracting '${prompt}'...`, 'info');
             const assetImage = await extractAssetFromImage(baseImage, prompt, assetType, project.styleReferences);
             const compressedAssetImage = await compressImageBase64(assetImage);
 
@@ -245,14 +244,13 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
         }
     };
 
-
     const handleCreateCharacterFromPanel = useCallback(async (subPanel: SubPanel) => {
         if (!subPanel.imageUrl) return;
         setIsLoading(true);
         try {
             const analysis = await analyzePanelForCharacters(subPanel.imageUrl, project.characters);
             if (analysis.new_characters.length === 0) {
-                showToast("Nano didn't find any new characters in this panel.", 'info');
+                showToast("No new characters detected.", 'info');
             } else if (analysis.new_characters.length === 1) {
                 const newCharInfo = analysis.new_characters[0];
                 const charImage = await extractAssetFromImage(subPanel.imageUrl, newCharInfo.description, 'character', project.styleReferences);
@@ -267,7 +265,7 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
             }
         } catch(e) {
             console.error("Failed to create character from panel:", e);
-            showToast("An error occurred during character creation.", 'error');
+            showToast("Error creating character.", 'error');
         } finally {
             setIsLoading(false);
         }
@@ -305,14 +303,14 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
             setEditingCharacter({
                 name: 'New Character',
                 description: '',
-                referenceImage: 'data:image/svg+xml;charset=UTF-8,%3csvg width="300" height="400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400"%3e%3crect width="300" height="400" fill="%232d3748"/%3e%3ctext x="50%25" y="50%25" fill="%23a0aec0" dominant-baseline="middle" text-anchor="middle" font-family="Arial" font-size="16pt"%3eUpload or Generate%3c/text%3e%3c/svg%3e',
+                referenceImage: 'data:image/svg+xml;charset=UTF-8,%3csvg width="300" height="400" xmlns="http://www.w3.org/2000/svg" viewBox="0 0 300 400"%3e%3crect width="300" height="400" fill="%2318181b"/%3e%3ctext x="50%25" y="50%25" fill="%2352525b" dominant-baseline="middle" text-anchor="middle" font-family="sans-serif" font-size="16pt"%3eUpload or Generate%3c/text%3e%3c/svg%3e',
             });
         }
     }, []);
 
     const executeAgentAction = useCallback(async (action: AgentFunctionCall) => {
         if (!activeChapter) return;
-        showToast(`Executing agent action: ${action.name}`, 'info');
+        showToast(`Executing: ${action.name}`, 'info');
 
         switch (action.name) {
             case 'create_manhwa_panel': {
@@ -379,30 +377,59 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
     if (!project || !activeChapter) return <div>Loading...</div>;
 
     return (
-        <div className="flex h-full">
+        <div className="flex h-full bg-[#09090b] text-gray-200 font-sans">
             {isLoading && <Loader message="Processing..." />}
-            <aside className="w-[300px] flex-shrink-0 bg-gray-900/80 backdrop-blur-sm border-r border-gray-700 p-4 flex flex-col">
-                 <div className="relative mb-4 group">
-                    <button ref={coverArtRef} onClick={() => setCoverViewerOpen(true)} className="w-full aspect-[9/16] rounded-lg overflow-hidden border-2 border-transparent group-hover:border-purple-500 transition-all">
-                        {isCoverLoading && <div className="w-full h-full bg-gray-800 flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-purple-500"></div></div>}
-                        {!isCoverLoading && <img src={project.coverImagePreview} alt={project.title} className="w-full h-full object-cover" />}
-                    </button>
-                    <div className="absolute inset-0 bg-black/50 flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => setCoverModalOpen(true)} className="flex items-center gap-2 px-3 py-1.5 text-xs font-semibold text-white bg-purple-600/80 rounded-full hover:bg-purple-600"><EditIcon className="w-3 h-3" /> Edit Cover</button>
-                        <button onClick={() => downloadBase64Image(project.coverImage, `${project.title}-cover.jpg`)} title="Download Full Cover" className="absolute bottom-2 right-2 p-2 bg-gray-800/60 rounded-full text-white hover:bg-cyan-600"><DownloadIcon className="w-4 h-4" /></button>
-                    </div>
+            
+            {/* LEFT SIDEBAR */}
+            <aside className="w-[280px] flex-shrink-0 bg-[#09090b]/80 backdrop-blur-2xl border-r border-white/5 flex flex-col z-20 relative">
+                 {/* Project Header */}
+                 <div className="p-4 border-b border-white/5 bg-white/[0.02]">
+                     <div className="flex items-center gap-2 mb-4">
+                        <button onClick={onExit} className="text-gray-400 hover:text-white hover:bg-white/10 p-1.5 rounded-full transition-all">
+                           <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M19 12H5"/><path d="M12 19l-7-7 7-7"/></svg>
+                        </button>
+                        <span className="text-[10px] font-bold uppercase tracking-wider text-violet-400/80">Studio Mode</span>
+                     </div>
+                     <input 
+                        type="text" 
+                        onBlur={(e) => updateProject(p => ({...p, title: e.target.value || 'Untitled Manhwa'}))} 
+                        defaultValue={project.title} 
+                        className="bg-transparent text-xl font-bold w-full focus:outline-none focus:ring-2 focus:ring-violet-500/50 rounded-lg px-2 py-1 -ml-2 text-white placeholder-gray-600 transition-all" 
+                     />
                  </div>
 
-                <div className="flex items-center justify-between mb-4">
-                     <input type="text" onBlur={(e) => updateProject(p => ({...p, title: e.target.value || 'Untitled Manhwa'}))} defaultValue={project.title} className="bg-transparent text-lg font-bold w-full focus:outline-none focus:bg-gray-800 rounded-md p-1 -m-1" />
-                    <button onClick={() => setSettingsModalOpen(true)} className="p-2 rounded-full hover:bg-gray-700"><SettingsIcon className="w-5 h-5"/></button>
-                </div>
+                 {/* Cover Art Preview */}
+                 <div className="p-5">
+                     <div className="relative group w-full aspect-[9/14] rounded-xl overflow-hidden border border-white/10 shadow-2xl bg-zinc-900/50">
+                        <button ref={coverArtRef} onClick={() => setCoverViewerOpen(true)} className="w-full h-full transition-transform duration-700 group-hover:scale-105">
+                            {isCoverLoading ? (
+                                <div className="w-full h-full flex items-center justify-center"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-violet-500"></div></div>
+                            ) : (
+                                <img src={project.coverImagePreview} alt={project.title} className="w-full h-full object-cover" />
+                            )}
+                        </button>
+                        {/* Hover Overlay */}
+                        <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity duration-300 gap-3 backdrop-blur-sm">
+                            <button onClick={() => setCoverModalOpen(true)} className="px-4 py-2 text-xs font-bold text-white bg-violet-600 rounded-full hover:bg-violet-500 shadow-lg shadow-violet-500/20 flex items-center gap-2 transform transition hover:scale-105">
+                                <EditIcon className="w-3 h-3" /> Edit Cover
+                            </button>
+                            <button onClick={() => downloadBase64Image(project.coverImage, `${project.title}-cover.jpg`)} className="p-2 bg-white/10 rounded-full hover:bg-white/20 text-white transition-colors backdrop-blur-md">
+                                <DownloadIcon className="w-4 h-4" />
+                            </button>
+                        </div>
+                     </div>
+                 </div>
 
-                <nav className="flex-grow overflow-y-auto pr-2 space-y-1">
+                <div className="flex-grow overflow-y-auto px-3 space-y-1 py-2">
+                    <div className="px-2 py-2 text-[10px] font-bold text-gray-500 uppercase tracking-wider flex justify-between items-center">
+                        <span>Chapters</span>
+                        <button onClick={() => setSettingsModalOpen(true)} className="hover:text-white transition-colors opacity-50 hover:opacity-100"><SettingsIcon className="w-3.5 h-3.5"/></button>
+                    </div>
                     {project.chapters.map(chap => {
                         const isActive = chap.id === activeChapterId;
                         return (
-                             <div key={chap.id} className={`flex items-center p-2 rounded-md cursor-pointer transition-colors group ${isActive ? 'bg-purple-600/30' : 'hover:bg-gray-800'}`}>
+                             <div key={chap.id} className={`flex items-center p-2.5 rounded-xl cursor-pointer transition-all duration-200 group relative overflow-hidden ${isActive ? 'bg-gradient-to-r from-violet-500/20 to-indigo-500/10 text-white border border-violet-500/20 shadow-lg shadow-violet-500/5' : 'hover:bg-white/5 text-gray-400 hover:text-gray-200 border border-transparent'}`}>
+                                {isActive && <div className="absolute left-0 top-0 bottom-0 w-1 bg-violet-500 rounded-full my-2 ml-0.5"></div>}
                                 {editingChapterId === chap.id ? (
                                     <input
                                         type="text"
@@ -410,21 +437,31 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
                                         onBlur={(e) => handleSaveChapterTitle(chap.id, e.target.value)}
                                         onKeyDown={(e) => e.key === 'Enter' && handleSaveChapterTitle(chap.id, (e.target as HTMLInputElement).value)}
                                         autoFocus
-                                        className="bg-gray-700 text-white w-full text-sm outline-none"
+                                        className="bg-black/50 text-white w-full text-sm outline-none rounded px-2 py-0.5 border border-violet-500/50"
                                     />
                                 ) : (
-                                    <span onClick={() => setActiveChapterId(chap.id)} className="flex-grow text-sm truncate">{chap.title}</span>
+                                    <span onClick={() => setActiveChapterId(chap.id)} className="flex-grow text-sm truncate font-medium pl-2">{chap.title}</span>
                                 )}
-                                <button onClick={() => setEditingChapterId(chap.id)} className="ml-2 p-1 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-white"><EditIcon className="w-3 h-3"/></button>
-                                <button onClick={() => handleDeleteChapter(chap.id)} className="p-1 opacity-0 group-hover:opacity-100 text-gray-400 hover:text-red-400"><TrashIcon className="w-3 h-3"/></button>
+                                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                    <button onClick={() => setEditingChapterId(chap.id)} className="p-1.5 hover:bg-white/10 rounded-md transition-colors"><EditIcon className="w-3 h-3"/></button>
+                                    <button onClick={() => handleDeleteChapter(chap.id)} className="p-1.5 hover:bg-red-500/20 text-red-400/70 hover:text-red-400 rounded-md transition-colors"><TrashIcon className="w-3 h-3"/></button>
+                                </div>
                             </div>
                         )
                     })}
-                </nav>
-                <button onClick={handleAddChapter} className="mt-4 flex items-center justify-center gap-2 w-full p-2 text-sm bg-gray-700/50 rounded-md hover:bg-gray-700"><PlusIcon className="w-4 h-4"/> Add Chapter</button>
+                </div>
+                
+                <div className="p-4 border-t border-white/5 bg-gradient-to-b from-transparent to-black/20">
+                    <button onClick={handleAddChapter} className="flex items-center justify-center gap-2 w-full py-3 text-sm font-bold text-white bg-gradient-to-r from-zinc-800 to-zinc-700 border border-white/5 rounded-xl hover:from-zinc-700 hover:to-zinc-600 hover:border-white/10 transition-all shadow-lg hover:shadow-xl transform hover:-translate-y-0.5 active:translate-y-0">
+                        <PlusIcon className="w-4 h-4"/> New Chapter
+                    </button>
+                </div>
             </aside>
 
-            <main className="flex-1">
+            {/* CENTER CANVAS */}
+            <main className="flex-1 relative bg-zinc-950 overflow-hidden">
+                <div className="absolute inset-0 bg-[url('https://grainy-gradients.vercel.app/noise.svg')] opacity-[0.15] pointer-events-none mix-blend-overlay"></div>
+                <div className="absolute top-0 left-0 w-full h-64 bg-gradient-to-b from-violet-900/10 to-transparent pointer-events-none"></div>
                 <Canvas 
                     chapter={activeChapter} 
                     setChapter={setActiveChapter}
@@ -438,11 +475,12 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
                 />
             </main>
 
-            <aside className="w-[450px] flex-shrink-0 bg-gray-900/80 backdrop-blur-sm border-l border-gray-700 p-4 flex flex-col gap-4">
-                <div className="flex-1 min-h-0">
+            {/* RIGHT SIDEBAR */}
+            <aside className="w-[400px] flex-shrink-0 bg-[#09090b]/80 backdrop-blur-2xl border-l border-white/5 flex flex-col z-20 relative shadow-2xl">
+                <div className="flex-1 min-h-0 overflow-hidden flex flex-col">
                     <AssetManager onOpenCharacterModal={handleOpenCharacterModal}/>
                 </div>
-                 <div className="flex-shrink-0 h-[40%] min-h-[300px]">
+                 <div className="h-[40%] min-h-[350px] border-t border-white/5 bg-black/20 backdrop-blur-md relative">
                     <AssistantPanel 
                         isAgentMode={isAgentMode} 
                         setIsAgentMode={setIsAgentMode}
@@ -454,18 +492,26 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle }) => 
                 </div>
             </aside>
             
-             <div className="fixed bottom-4 right-[474px] flex flex-col gap-2 z-40">
-                <button onClick={() => setShowLiveAssistant(true)} className="bg-gray-800 p-3 rounded-full shadow-lg hover:bg-purple-600 border border-gray-700" title="Live AI Debug Assistant"><AssistantIcon className="w-6 h-6"/></button>
-                <button onClick={() => setImageAnalyzerOpen(true)} className="bg-gray-800 p-3 rounded-full shadow-lg hover:bg-purple-600 border border-gray-700" title="Analyze Image"><PhotoIcon className="w-6 h-6"/></button>
-                <button onClick={() => setImageGeneratorOpen(true)} className="bg-gray-800 p-3 rounded-full shadow-lg hover:bg-purple-600 border border-gray-700" title="AI Art Generator"><ImageIcon className="w-6 h-6"/></button>
+            {/* FLOATING TOOLS (Bottom Right) */}
+             <div className="fixed bottom-8 right-[420px] flex flex-col gap-4 z-40">
+                <button onClick={() => setShowLiveAssistant(true)} className="w-12 h-12 flex items-center justify-center bg-zinc-800/80 backdrop-blur-xl rounded-full shadow-lg shadow-black/50 border border-white/10 text-gray-400 hover:text-white hover:bg-violet-600 hover:border-violet-500 transition-all hover:scale-110 group" title="Live AI Debug Assistant">
+                    <AssistantIcon className="w-6 h-6 group-hover:animate-pulse"/>
+                </button>
+                <button onClick={() => setImageAnalyzerOpen(true)} className="w-12 h-12 flex items-center justify-center bg-zinc-800/80 backdrop-blur-xl rounded-full shadow-lg shadow-black/50 border border-white/10 text-gray-400 hover:text-white hover:bg-pink-600 hover:border-pink-500 transition-all hover:scale-110" title="Analyze Image">
+                    <PhotoIcon className="w-5 h-5"/>
+                </button>
+                <button onClick={() => setImageGeneratorOpen(true)} className="w-12 h-12 flex items-center justify-center bg-zinc-800/80 backdrop-blur-xl rounded-full shadow-lg shadow-black/50 border border-white/10 text-gray-400 hover:text-white hover:bg-cyan-600 hover:border-cyan-500 transition-all hover:scale-110" title="AI Art Generator">
+                    <ImageIcon className="w-5 h-5"/>
+                </button>
             </div>
 
+            {/* MODALS */}
             <Modal isOpen={isCoverModalOpen} onClose={() => setCoverModalOpen(false)} title="Generate Cover Art">
                  <div className="space-y-4">
-                    <textarea placeholder="Describe your cover art..." value={coverPrompt} onChange={e => setCoverPrompt(e.target.value)} className="w-full p-2 bg-gray-700 rounded-md" rows={3}/>
-                    <div><p className="text-sm font-semibold mb-2">Characters:</p><div className="flex flex-wrap gap-2">{project.characters.map(char => (<button key={char.id} onClick={() => setSelectedCoverCharIds(p => p.includes(char.id) ? p.filter(i => i !== char.id) : [...p, char.id])} className={`px-3 py-1 text-sm rounded-full ${selectedCoverCharIds.includes(char.id) ? 'bg-purple-600' : 'bg-gray-600'}`}>{char.name}</button>))}</div></div>
-                    <div><p className="text-sm font-semibold mb-2">Style References:</p><div className="flex flex-wrap gap-2">{project.styleReferences.map(style => (<button key={style.id} onClick={() => setSelectedCoverStyleIds(p => p.includes(style.id) ? p.filter(i => i !== style.id) : [...p, style.id])} className={`px-3 py-1 text-sm rounded-full ${selectedCoverStyleIds.includes(style.id) ? 'bg-purple-600' : 'bg-gray-600'}`}>{style.name}</button>))}</div></div>
-                    <button onClick={handleGenerateCover} className="w-full bg-purple-600 text-white font-bold py-2 rounded-md mt-4">Generate</button>
+                    <textarea placeholder="Describe the scene..." value={coverPrompt} onChange={e => setCoverPrompt(e.target.value)} className="w-full p-3 bg-zinc-950 border border-white/10 rounded-xl focus:border-violet-500/50 focus:ring-1 focus:ring-violet-500/50 focus:outline-none transition-all text-sm" rows={3}/>
+                    <div><p className="text-xs font-bold text-gray-500 uppercase mb-2">Characters</p><div className="flex flex-wrap gap-2">{project.characters.map(char => (<button key={char.id} onClick={() => setSelectedCoverCharIds(p => p.includes(char.id) ? p.filter(i => i !== char.id) : [...p, char.id])} className={`px-3 py-1 text-xs font-medium rounded-full border transition-all ${selectedCoverCharIds.includes(char.id) ? 'bg-violet-500/20 border-violet-500 text-violet-200' : 'bg-zinc-800 border-white/5 text-gray-400 hover:bg-zinc-700'}`}>{char.name}</button>))}</div></div>
+                    <div><p className="text-xs font-bold text-gray-500 uppercase mb-2">Style</p><div className="flex flex-wrap gap-2">{project.styleReferences.map(style => (<button key={style.id} onClick={() => setSelectedCoverStyleIds(p => p.includes(style.id) ? p.filter(i => i !== style.id) : [...p, style.id])} className={`px-3 py-1 text-xs font-medium rounded-full border transition-all ${selectedCoverStyleIds.includes(style.id) ? 'bg-violet-500/20 border-violet-500 text-violet-200' : 'bg-zinc-800 border-white/5 text-gray-400 hover:bg-zinc-700'}`}>{style.name}</button>))}</div></div>
+                    <button onClick={handleGenerateCover} className="w-full bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold py-3 rounded-xl shadow-lg shadow-violet-500/20 hover:opacity-90 transition-all mt-4 hover:scale-[1.02] active:scale-[0.98]">Generate Cover</button>
                  </div>
             </Modal>
             <ImageViewerModal isOpen={isCoverViewerOpen} onClose={() => setCoverViewerOpen(false)} imageUrl={project.coverImage} />
