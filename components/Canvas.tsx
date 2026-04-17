@@ -468,6 +468,16 @@ export const Canvas: React.FC<CanvasProps> = ({
     const handleDeletePanel = useCallback(async (panelId: string) => {
         if (await showConfirmation({ title: "Borrar Panel", message: "¿Seguro?" })) setChapter(prev => ({ ...prev, panels: prev.panels.filter(p => p.id !== panelId) }));
     }, [setChapter]);
+
+    const handleDeleteSubPanel = useCallback((subPanelId: string) => {
+        setChapter(prev => ({
+            ...prev,
+            panels: prev.panels
+                .map(p => ({ ...p, subPanels: p.subPanels.filter(sp => sp.id !== subPanelId) }))
+                // Drop any panel that lost all its sub-panels so we don't leave empty rows.
+                .filter(p => p.subPanels.length > 0),
+        }));
+    }, [setChapter]);
     
     const movePanel = useCallback((panelId: string, direction: 'up' | 'down') => {
         setChapter(prev => {
@@ -754,6 +764,7 @@ export const Canvas: React.FC<CanvasProps> = ({
                                                 onUploadClick={() => {}}
                                                 onDownloadClick={() => subPanel.imageUrl && downloadBase64Image(subPanel.imageUrl, `panel-${subPanel.id}.jpg`)}
                                                 onDeleteContent={() => updateSubPanel(subPanel.id, (sp) => ({ ...sp, imageUrl: null, generatedDescription: undefined }))}
+                                                onDeletePanel={() => handleDeleteSubPanel(subPanel.id)}
                                                 onRegenerate={() => {
                                                     setGenerationQueue(prev => [...prev, subPanel]);
                                                     resetErrorCount();
@@ -813,11 +824,11 @@ export const Canvas: React.FC<CanvasProps> = ({
             {editingSubPanel && <SubPanelEditorModal isOpen={!!editingSubPanel} onClose={() => setEditingSubPanel(null)} subPanel={editingSubPanel} onSave={(sp) => { updateSubPanel(sp.id, () => sp); setEditingSubPanel(null); }} />}
             {continuingSubPanel && <ContinuePanelModal isOpen={!!continuingSubPanel} onClose={() => setContinuingSubPanel(null)} sourceSubPanel={continuingSubPanel} onConfirm={handleCreateNextPanel} />}
             <ExportModal isOpen={isExportModalOpen} onClose={() => setIsExportModalOpen(false)} onExportWebtoon={handleExportWebtoon} onExportPDF={handleExportPDF} onExportJSON={handleExportJSON} isProcessing={isExporting} />
-            {magicEditSubPanel && (
-                <MagicEditModal 
-                    isOpen={!!magicEditSubPanel} 
-                    onClose={() => setMagicEditSubPanel(null)} 
-                    subPanelImage={magicEditSubPanel.imageUrl!}
+            {magicEditSubPanel && magicEditSubPanel.imageUrl && (
+                <MagicEditModal
+                    isOpen={!!magicEditSubPanel}
+                    onClose={() => setMagicEditSubPanel(null)}
+                    subPanelImage={magicEditSubPanel.imageUrl}
                     onSave={(newImg) => updateSubPanel(magicEditSubPanel.id, (sp) => ({...sp, imageUrl: newImg}))}
                 />
             )}

@@ -1,5 +1,6 @@
 
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import type { SubPanel } from '../types';
 import { TrashIcon } from './icons/TrashIcon';
 import { EditIcon } from './icons/EditIcon';
@@ -20,6 +21,7 @@ export const SubPanelComponent: React.FC<{
     onUploadClick: () => void;
     onDownloadClick: () => void;
     onDeleteContent: () => void;
+    onDeletePanel?: () => void;
     onRegenerate: () => void;
     onAddBubble: () => void;
     onAnalyze: () => void;
@@ -30,9 +32,31 @@ export const SubPanelComponent: React.FC<{
     isSelected: boolean;
     onSelect: () => void;
     isAgentMode: boolean;
-}> = ({ subPanel, onGenerateClick, onEditClick, onMagicEditClick, onDeleteContent, onRegenerate, onAnalyze, onCreateCharacter, onContinuePanel, status, isSelected, onSelect, isAgentMode }) => {
-    
+}> = ({ subPanel, onGenerateClick, onEditClick, onMagicEditClick, onDeleteContent, onDeletePanel, onRegenerate, onAnalyze, onCreateCharacter, onContinuePanel, status, isSelected, onSelect, isAgentMode }) => {
+
     const [activeExplanation, setActiveExplanation] = useState<string | null>(null);
+    const [contextMenu, setContextMenu] = useState<{ x: number; y: number } | null>(null);
+
+    // Close context menu on any outside click / scroll / escape.
+    useEffect(() => {
+        if (!contextMenu) return;
+        const close = () => setContextMenu(null);
+        const onKey = (e: KeyboardEvent) => { if (e.key === 'Escape') setContextMenu(null); };
+        window.addEventListener('click', close);
+        window.addEventListener('scroll', close, true);
+        window.addEventListener('keydown', onKey);
+        return () => {
+            window.removeEventListener('click', close);
+            window.removeEventListener('scroll', close, true);
+            window.removeEventListener('keydown', onKey);
+        };
+    }, [contextMenu]);
+
+    const handleContextMenu = (e: React.MouseEvent) => {
+        e.preventDefault();
+        e.stopPropagation();
+        setContextMenu({ x: e.clientX, y: e.clientY });
+    };
 
     const stopPropagation = (e: React.MouseEvent) => {
         e.stopPropagation();
@@ -73,7 +97,7 @@ export const SubPanelComponent: React.FC<{
     }`;
 
     return (
-        <div onClick={onSelect} className={containerClass}>
+        <div onClick={onSelect} onContextMenu={handleContextMenu} className={containerClass}>
             {/* Content Layer */}
             {subPanel.imageUrl && (
                 <img src={subPanel.imageUrl} alt={subPanel.prompt || 'panel'} className={`w-full h-full object-cover transition-transform duration-700 group-hover:scale-105 ${status === 'generating' ? 'opacity-50 scale-105 blur-sm' : ''}`} />
@@ -200,14 +224,43 @@ export const SubPanelComponent: React.FC<{
                         <CharacterFromPanelIcon className="w-4 h-4" />
                     </button>
                     
-                    <button 
-                        onClick={(e) => { stopPropagation(e); onDeleteContent(); }} 
+                    <button
+                        onClick={(e) => { stopPropagation(e); onDeleteContent(); }}
                         className="p-2 rounded-xl hover:bg-red-900/30 text-red-400 hover:text-red-300 transition-all"
                         title="Borrar Imagen"
                     >
                         <TrashIcon className="w-4 h-4" />
                     </button>
                 </div>
+            )}
+
+            {contextMenu && createPortal(
+                <div
+                    className="fixed z-[1000] min-w-[180px] rounded-xl bg-zinc-900/95 backdrop-blur-xl border border-white/10 shadow-2xl py-1.5 text-sm"
+                    style={{ left: contextMenu.x, top: contextMenu.y }}
+                    onClick={(e) => e.stopPropagation()}
+                    onContextMenu={(e) => e.preventDefault()}
+                >
+                    {subPanel.imageUrl && (
+                        <button
+                            className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-white/5 text-gray-200"
+                            onClick={() => { setContextMenu(null); onDeleteContent(); }}
+                        >
+                            <TrashIcon className="w-4 h-4 text-gray-400" />
+                            Borrar imagen
+                        </button>
+                    )}
+                    {onDeletePanel && (
+                        <button
+                            className="w-full text-left px-3 py-2 flex items-center gap-2 hover:bg-red-900/30 text-red-400"
+                            onClick={() => { setContextMenu(null); onDeletePanel(); }}
+                        >
+                            <TrashIcon className="w-4 h-4" />
+                            Eliminar viñeta
+                        </button>
+                    )}
+                </div>,
+                document.body
             )}
         </div>
     );

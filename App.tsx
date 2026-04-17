@@ -97,13 +97,26 @@ function App() {
 
       checkSession();
 
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-          if (session?.user) {
-              setUser({ id: session.user.id, email: session.user.email || '' });
-              setCurrentView('dashboard');
-          } else {
+      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+          // Only react to real auth transitions. TOKEN_REFRESHED and USER_UPDATED
+          // fire on every tab switch because supabase-js auto-refreshes — if we
+          // reset currentView on those we'd kick the user out of the Studio mid-edit.
+          if (event === 'SIGNED_OUT') {
               setUser(null);
               setCurrentView('auth');
+              return;
+          }
+          if (event === 'SIGNED_IN' && session?.user) {
+              setUser({ id: session.user.id, email: session.user.email || '' });
+              // Only route to dashboard if we're currently on the auth screen.
+              // Otherwise preserve whatever view the user was in.
+              setCurrentView(v => v === 'auth' ? 'dashboard' : v);
+              return;
+          }
+          // For TOKEN_REFRESHED / USER_UPDATED / INITIAL_SESSION: just keep user
+          // info fresh without touching the view.
+          if (session?.user) {
+              setUser({ id: session.user.id, email: session.user.email || '' });
           }
       });
 
