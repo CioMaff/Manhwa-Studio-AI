@@ -1,13 +1,17 @@
-
 import { createClient } from '@supabase/supabase-js';
 
-// --- CONFIGURACIÓN ESTRICTA MANHWA AI ---
-// Project ID: rkvjtxpngizairgzykez
-// ADVERTENCIA: Esta configuración apunta EXCLUSIVAMENTE a la base de datos de Manhwa AI.
+// --- CONFIGURACIÓN MANHWA AI ---
+// Env vars (set in .env.local):
+//   VITE_SUPABASE_URL=https://<your-project>.supabase.co
+//   VITE_SUPABASE_ANON_KEY=<anon-key>
+// Keeping the old hardcoded project as a fallback so existing users don't break
+// during the migration. Delete the literals once everyone has .env.local set.
+const FALLBACK_URL = 'https://cszizbtqgjhsoyybemhu.supabase.co';
+const FALLBACK_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNzeml6YnRxZ2poc295eWJlbWh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMzA2NjMsImV4cCI6MjA4NzYwNjY2M30.YsaXbKvGzEyfssizyIijS0tE-gvpStMxq7XHBlf4Bng';
 
-const SUPABASE_URL = 'https://cszizbtqgjhsoyybemhu.supabase.co';
-// User's anon key
-const SUPABASE_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNzeml6YnRxZ2poc295eWJlbWh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMzA2NjMsImV4cCI6MjA4NzYwNjY2M30.YsaXbKvGzEyfssizyIijS0tE-gvpStMxq7XHBlf4Bng'; 
+const env = (import.meta as any).env ?? {};
+export const SUPABASE_URL: string = env.VITE_SUPABASE_URL || FALLBACK_URL;
+export const SUPABASE_KEY: string = env.VITE_SUPABASE_ANON_KEY || FALLBACK_KEY;
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
     auth: {
@@ -16,27 +20,62 @@ export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
     }
 });
 
+// Invoke a Supabase Edge Function with the user's JWT attached.
+// Throws on non-2xx (and surfaces the server error message).
+export async function invokeEdgeFunction<T>(
+    name: string,
+    body: Record<string, unknown>
+): Promise<T> {
+    const { data: { session } } = await supabase.auth.getSession();
+    const token = session?.access_token;
+    if (!token) {
+        throw new Error(
+            "No active Supabase session — user must be logged in before calling Edge Functions. " +
+            "If you're in guest mode, backend-proxied features are disabled."
+        );
+    }
+
+    const url = `${SUPABASE_URL}/functions/v1/${name}`;
+    const response = await fetch(url, {
+        method: 'POST',
+        headers: {
+            'Authorization': `Bearer ${token}`,
+            'Content-Type': 'application/json',
+            'apikey': SUPABASE_KEY,
+        },
+        body: JSON.stringify(body),
+    });
+
+    const text = await response.text();
+    let parsed: any;
+    try { parsed = text ? JSON.parse(text) : null; } catch { parsed = text; }
+
+    if (!response.ok) {
+        const msg = (parsed && typeof parsed === 'object' && parsed.error) || text || `HTTP ${response.status}`;
+        const err = new Error(`[${name}] ${msg}`);
+        (err as any).status = response.status;
+        throw err;
+    }
+
+    return parsed as T;
+}
+
 export const checkSupabaseConnection = async (): Promise<{ status: 'ok' | 'error' | 'missing_table' | 'offline', message?: string }> => {
     try {
-        // Intentamos una lectura ligera (count) para verificar acceso y existencia de tabla
         const { count, error } = await supabase
             .from('projects')
             .select('*', { count: 'exact', head: true });
 
         if (error) {
             console.error("Supabase Check Error:", error);
-            
             if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
                 return { status: 'offline', message: 'No se pudo conectar a Supabase (Offline/Red).' };
             }
-
-            // Código de error PostgreSQL para "undefined table"
             if (error.code === '42P01' || error.message.includes('does not exist')) {
                 return { status: 'missing_table', message: 'La tabla "projects" no existe en Supabase.' };
             }
             return { status: 'error', message: error.message };
         }
-
         return { status: 'ok', message: `Conectado a Manhwa AI. ${count || 0} proyectos.` };
     } catch (e: any) {
         const msg = e.message || "Error desconocido";

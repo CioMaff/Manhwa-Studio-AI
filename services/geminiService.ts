@@ -1,29 +1,51 @@
 
-import { GoogleGenAI, Modality, Type } from "@google/genai";
+import { Modality, Type } from "@google/genai";
 import type { Part } from "@google/genai";
 import type { Panel, Character, StyleReference, ChatMessage, Project, ScenePlanPage, ObjectAsset, SceneType, BackgroundAsset, SubPanel, LiveTranscriptEntry, AgentFunctionCall } from '../types';
 import { showToast } from "../systems/uiSystem";
 import { MANHWA_EXPERT_CONTEXT } from "../utils/manhwaContext";
 import { layouts } from "../components/layouts";
 import { logger } from "../systems/logger";
+import { invokeEdgeFunction } from "../utils/supabaseClient";
 
-const getAI = () => {
-    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
-    if (!apiKey) {
-        throw new Error(
-            "Missing Gemini API key. Set GEMINI_API_KEY (or API_KEY) in your environment. " +
-            "Never hardcode keys in client code — they get leaked on every deploy."
-        );
-    }
-    return new GoogleGenAI({ apiKey });
+// -----------------------------------------------------------------------------
+// SECURITY: the Gemini API key MUST stay server-side. This module no longer
+// instantiates the GoogleGenAI SDK directly. Every model call goes through the
+// `gemini-proxy` Supabase Edge Function which:
+//   1. Verifies the caller's Supabase JWT
+//   2. Enforces rate limiting via the `check_rate_limit` RPC
+//   3. Uses GEMINI_API_KEY from Edge Function secrets (never reaches the client)
+//
+// The shim below is shape-compatible with `new GoogleGenAI(...).models.generateContent`
+// so existing callsites keep working unchanged. Do NOT add back direct SDK usage.
+// See CLAUDE.md — feedback_security_rules.md.
+// -----------------------------------------------------------------------------
+
+interface GeminiProxyClient {
+    models: {
+        generateContent: (args: { model: string; contents: unknown; config?: Record<string, unknown> }) => Promise<any>;
+    };
+}
+
+const proxyClient: GeminiProxyClient = {
+    models: {
+        generateContent: (args) =>
+            invokeEdgeFunction<{ text: string | null; candidates: any[] }>('gemini-proxy', {
+                model: args.model,
+                contents: args.contents as Record<string, unknown>,
+                config: args.config ?? {},
+            }),
+    },
 };
+
+const getAI = (): GeminiProxyClient => proxyClient;
 
 // --- MODELS (NANO BANANA PRO CONFIGURATION) ---
 const MODEL_TEXT = 'gemini-3.1-pro-preview'; 
 const MODEL_IMAGE = 'gemini-3-pro-image-preview'; // UPGRADED TO PRO
 // Fallback
-const MODEL_IMAGE_FALLBACK = 'gemini-2.5-flash-image'; 
-const MODEL_TEXT_FALLBACK = 'gemini-3-flash-preview';
+// Fallback models intentionally removed — Gemini 3.x failures must surface loudly
+// rather than silently downgrading to Flash/2.5 (which produces inconsistent output).
 
 // --- RATE LIMITING ---
 let lastCallTime = 0;
@@ -86,19 +108,10 @@ const makeApiCallWithRetry = async <T>(apiCall: () => Promise<T>, maxRetries = 2
     }
 };
 
-const callWithFallback = async <T>(
-    operationName: string,
-    primaryCall: () => Promise<T>,
-    fallbackCall: () => Promise<T>
-): Promise<T> => {
-    try {
-        logger.system(`API Call: ${operationName} [Primary: Nano Banana Pro]`);
-        return await makeApiCallWithRetry(primaryCall);
-    } catch (error: any) {
-        logger.warn(`${operationName}: Primary failed. Retrying with Flash...`);
-        return await makeApiCallWithRetry(fallbackCall);
-    }
-}
+const runPrimary = async <T>(operationName: string, primaryCall: () => Promise<T>): Promise<T> => {
+    logger.system(`API Call: ${operationName} [Nano Banana Pro]`);
+    return makeApiCallWithRetry(primaryCall);
+};
 
 const parseDataUrl = (dataUrl: string) => {
   if (!dataUrl || !dataUrl.startsWith('data:')) return null;
@@ -251,22 +264,11 @@ export const generateSubPanelImage = async (
         } 
     };
     
-    return callWithFallback(
-        'generateSubPanelImage',
-        async () => {
-            // Primary: Gemini 3.0 Pro Image
-            const response = await getAI().models.generateContent({ model: MODEL_IMAGE, contents: { parts }, config });
-            if (!response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
-            return `data:image/png;base64,${response.candidates[0].content.parts[0].inlineData.data}`;
-        },
-        async () => {
-             // Fallback: Gemini 2.5 Flash Image (No imageSize param supported)
-             const fallbackConfig = { imageConfig: { aspectRatio: targetAspectRatio } };
-             const response = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts }, config: fallbackConfig });
-            if (!response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
-            return `data:image/png;base64,${response.candidates[0].content.parts[0].inlineData.data}`;
-        }
-    );
+    return runPrimary('generateSubPanelImage', async () => {
+        const response = await getAI().models.generateContent({ model: MODEL_IMAGE, contents: { parts }, config });
+        if (!response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+        return `data:image/png;base64,${response.candidates[0].content.parts[0].inlineData.data}`;
+    });
 };
 
 // --- QUALITY CONTROL AGENT ---
@@ -324,19 +326,11 @@ export const editPanelImage = async (baseImage: string, prompt: string): Promise
         { inlineData: parseDataUrl(baseImage)! }
     ];
 
-    return callWithFallback(
-        'editPanelImage',
-        async () => {
-            const r = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts } });
-            if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
-            return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
-        },
-        async () => {
-             const r = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts } });
-            if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
-            return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
-        }
-    );
+    return runPrimary('editPanelImage', async () => {
+        const r = await getAI().models.generateContent({ model: MODEL_IMAGE, contents: { parts } });
+        if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+        return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
+    });
 };
 
 export const chatWithAgent = async (history: ChatMessage[], project: Project): Promise<{ text: string, functionCall?: AgentFunctionCall }> => {
@@ -362,34 +356,31 @@ export const chatWithAgent = async (history: ChatMessage[], project: Project): P
     Help the user create an award-winning Webtoon.
     Be creative, suggest layouts from 'Datos-Manwha', and be technically precise.`;
 
-    return callWithFallback(
-        'chatWithAgent',
-        async () => {
-            const chat = getAI().chats.create({
-                model: MODEL_TEXT,
-                history: geminiHistory,
-                config: { systemInstruction }
-            });
-            
-            const result = await chat.sendMessage({ message: currentParts });
-            
-            let fc: AgentFunctionCall | undefined = undefined;
-            const candidate = result.candidates?.[0];
-            if (candidate) {
-                 const toolCall = candidate.content?.parts?.find(p => 'functionCall' in p && p.functionCall);
-                 if (toolCall && toolCall.functionCall) {
-                     fc = { name: toolCall.functionCall.name, args: toolCall.functionCall.args as any };
-                 }
-            }
-            
-            return { text: result.text || "", functionCall: fc };
-        },
-        async () => {
-            const chat = getAI().chats.create({ model: MODEL_TEXT_FALLBACK, history: geminiHistory, config: { systemInstruction } });
-            const result = await chat.sendMessage({ message: currentParts });
-            return { text: result.text || "" };
+    return runPrimary('chatWithAgent', async () => {
+        // Proxy is stateless, so we flatten the history into the contents array
+        // instead of using `chats.create`. Each prior turn becomes a content entry.
+        const contents = [
+            ...geminiHistory,
+            { role: lastMsg.role || 'user', parts: currentParts },
+        ];
+
+        const result = await getAI().models.generateContent({
+            model: MODEL_TEXT,
+            contents,
+            config: { systemInstruction },
+        });
+
+        let fc: AgentFunctionCall | undefined = undefined;
+        const candidate = result.candidates?.[0];
+        if (candidate) {
+             const toolCall = candidate.content?.parts?.find((p: any) => 'functionCall' in p && p.functionCall);
+             if (toolCall && toolCall.functionCall) {
+                 fc = { name: toolCall.functionCall.name, args: toolCall.functionCall.args as any };
+             }
         }
-    );
+
+        return { text: result.text || "", functionCall: fc };
+    });
 };
 
 export const generateCoverArt = async (prompt: string, characters: Character[], styleReferences: StyleReference[]): Promise<string> => {
@@ -416,19 +407,11 @@ export const generateCoverArt = async (prompt: string, characters: Character[], 
         imageConfig: { aspectRatio: '9:16', imageSize: '2K' } 
     };
     
-    return callWithFallback(
-        'generateCoverArt',
-        async () => {
-            const r = await getAI().models.generateContent({ model: MODEL_IMAGE, contents: { parts }, config });
-            if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
-            return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
-        },
-        async () => {
-             const r = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts }, config: { imageConfig: { aspectRatio: '9:16' } } });
-            if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
-            return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
-        }
-    );
+    return runPrimary('generateCoverArt', async () => {
+        const r = await getAI().models.generateContent({ model: MODEL_IMAGE, contents: { parts }, config });
+        if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+        return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
+    });
 };
 
 export const planScene = async (
@@ -466,15 +449,22 @@ export const planScene = async (
         parts.push({ text: prompt });
     }
 
+    const panelCountDirective = panelCount && panelCount > 0
+        ? `\n    [PANEL COUNT — STRICT]: The total number of sub_panels across all pages MUST equal EXACTLY ${panelCount}. Distribute them across pages as fits the narrative pacing. DO NOT generate more or fewer.`
+        : `\n    [PANEL COUNT]: Auto-detect based on pacing.`;
+
+    const flowDirective = flowStyle === 'waterfall'
+        ? `\n    [FLOW]: Vertical webtoon waterfall — strongly prefer tall single-panel pages (layout "1-tall" or "1-ultra-tall") to drive reading pace.`
+        : `\n    [FLOW]: Grid — use varied layouts from the allowed list below for visual rhythm.`;
+
     parts.push({ text: `
-    [CONTEXT] 
+    [CONTEXT]
     - Type: ${sceneType || 'Dynamic Manhwa Flow'}
     - Characters: ${characters.map(c=>c.name).join(', ')}.
-    - Format: WEBTOON (Vertical Scroll). CRITICAL: USE TALL LAYOUTS.
-    - Approximate Panel Count: ${panelCount || 'Auto-detect based on pacing'}.
+    - Format: WEBTOON (Vertical Scroll). CRITICAL: USE TALL LAYOUTS.${panelCountDirective}${flowDirective}
 
-    [AVAILABLE LAYOUTS]: ${layoutList}.
-    
+    [AVAILABLE LAYOUTS]: ${allowedLayouts.join(', ') || layoutList}.
+
     [LAYOUT RULES - WEBTOON ONLY]
     - FORBIDDEN: '1' (Square). DO NOT USE IT. It is too small for Webtoon.
     - REQUIRED: Use '1-tall' or '1-ultra-tall' for standard panels.
@@ -487,17 +477,10 @@ export const planScene = async (
     
     const schema = { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { page_number: { type: Type.INTEGER }, layout: { type: Type.STRING }, sub_panels: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { shot_type: { type: Type.STRING }, camera_angle: { type: Type.STRING }, action_description: { type: Type.STRING }, justification: { type: Type.STRING } }, required: ['shot_type', 'camera_angle', 'action_description'] } } }, required: ['page_number', 'layout', 'sub_panels'] } };
 
-    return callWithFallback(
-        'planScene',
-        async () => {
-            const r = await getAI().models.generateContent({ model: MODEL_TEXT, contents: { parts }, config: { responseMimeType: 'application/json', responseSchema: schema } });
-            return JSON.parse(r.text || "[]") as ScenePlanPage[];
-        },
-        async () => {
-             const r = await getAI().models.generateContent({ model: MODEL_TEXT_FALLBACK, contents: { parts }, config: { responseMimeType: 'application/json', responseSchema: schema } });
-            return JSON.parse(r.text || "[]") as ScenePlanPage[];
-        }
-    );
+    return runPrimary('planScene', async () => {
+        const r = await getAI().models.generateContent({ model: MODEL_TEXT, contents: { parts }, config: { responseMimeType: 'application/json', responseSchema: schema } });
+        return JSON.parse(r.text || "[]") as ScenePlanPage[];
+    });
 };
 
 export const analyzeStoryAndPlan = async (
@@ -520,7 +503,7 @@ export const generateAppStatusReport = async (history: string, implementation: s
 
 export const extractAssetFromImage = async (img: string, desc: string, type: string, styles: StyleReference[] = []) => {
     const parts: Part[] = [{ text: `Extract ${type}: ${desc}` }, { inlineData: parseDataUrl(img)! }];
-    const r = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts }});
+    const r = await getAI().models.generateContent({ model: MODEL_IMAGE, contents: { parts }});
     if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image");
     return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
 };

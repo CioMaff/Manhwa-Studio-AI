@@ -164,7 +164,9 @@ export interface ScenePlanPage {
   sub_panels: SubPanelPlan[];
 }
 
-export type SceneType = 'dialogue' | 'action' | 'emotional' | 'establishment' | '';
+export type SceneType = 'dialogue' | 'action' | 'emotional' | 'establishment' | 'reveal' | 'dramatic' | '';
+
+export type CompositionType = 'dramatic-3' | 'dialogue-3' | 'atmospheric-2' | 'impact-single' | 'horizontal-split' | 'dynamic-4' | 'balanced';
 
 export interface NewCharacterEntity {
   name_suggestion: string;

@@ -88,6 +88,44 @@ export const cropImageBase64 = (base64: string, targetAspect = 3 / 4): Promise<s
     });
 };
 
+export const resizeAndCropToExactDimensions = (
+  base64Image: string,
+  targetWidth: number,
+  targetHeight: number
+): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      canvas.width = targetWidth;
+      canvas.height = targetHeight;
+      const ctx = canvas.getContext('2d');
+      if (!ctx) return reject(new Error("Could not get canvas context"));
+
+      const sourceRatio = img.width / img.height;
+      const targetRatio = targetWidth / targetHeight;
+
+      let sx: number, sy: number, sWidth: number, sHeight: number;
+      if (sourceRatio > targetRatio) {
+        sHeight = img.height;
+        sWidth = img.height * targetRatio;
+        sx = (img.width - sWidth) / 2;
+        sy = 0;
+      } else {
+        sWidth = img.width;
+        sHeight = img.width / targetRatio;
+        sx = 0;
+        sy = (img.height - sHeight) / 2;
+      }
+
+      ctx.drawImage(img, sx, sy, sWidth, sHeight, 0, 0, targetWidth, targetHeight);
+      resolve(canvas.toDataURL('image/jpeg', 0.92));
+    };
+    img.onerror = (error) => reject(error);
+    img.src = base64Image;
+  });
+};
+
 export const downloadBase64Image = (base64: string, filename: string) => {
     const link = document.createElement('a');
     link.href = base64;
