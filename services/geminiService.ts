@@ -41,7 +41,8 @@ const proxyClient: GeminiProxyClient = {
 const getAI = (): GeminiProxyClient => proxyClient;
 
 // --- MODELS (NANO BANANA PRO CONFIGURATION) ---
-const MODEL_TEXT = 'gemini-3.1-pro-preview'; 
+// Keep these IDs in sync with ALLOWED_MODELS in supabase/functions/gemini-proxy/index.ts
+const MODEL_TEXT = 'gemini-3.1-pro-preview';
 const MODEL_IMAGE = 'gemini-3-pro-image-preview'; // UPGRADED TO PRO
 // Fallback
 // Fallback models intentionally removed — Gemini 3.x failures must surface loudly

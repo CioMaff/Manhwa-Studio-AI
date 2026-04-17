@@ -12,6 +12,10 @@ const ALLOWED_MODELS = new Set<string>([
   "gemini-3-pro-image-preview",
   "gemini-3.1-flash-live-preview",
   "gemini-2.5-flash-preview-tts",
+  // Used by asset/editing/continuity/dialogue services for image work and heavier
+  // text analysis. All go through this proxy — no direct client-side SDK usage.
+  "gemini-2.5-flash-image",
+  "gemini-2.5-pro",
 ]);
 
 // Hard cap on request body size (base64 images can get big; 12 MB is generous).

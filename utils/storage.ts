@@ -9,6 +9,35 @@ import { supabase } from './supabaseClient';
     Prioridad: Supabase (Nube) -> IndexedDB (Local Backup)
 */
 
+// Older projects in Supabase were saved before some collection fields existed
+// (knowledgeBase, dialogueStyles, backgrounds, agentHistory, chatHistory, etc.).
+// When those come back as `undefined`, any `.map` / `.flatMap` / `.length` in the
+// UI crashes. Normalise once at the load boundary so consumers can treat every
+// collection as a real array.
+const normalizeProject = (raw: any): Project => {
+    if (!raw || typeof raw !== 'object') return raw as Project;
+    return {
+        ...raw,
+        chapters: Array.isArray(raw.chapters) ? raw.chapters.map((c: any) => ({
+            ...c,
+            panels: Array.isArray(c?.panels) ? c.panels.map((p: any) => ({
+                ...p,
+                subPanels: Array.isArray(p?.subPanels) ? p.subPanels : [],
+                dialogueBubbles: Array.isArray(p?.dialogueBubbles) ? p.dialogueBubbles : [],
+            })) : [],
+        })) : [],
+        characters: Array.isArray(raw.characters) ? raw.characters : [],
+        objects: Array.isArray(raw.objects) ? raw.objects : [],
+        backgrounds: Array.isArray(raw.backgrounds) ? raw.backgrounds : [],
+        styleReferences: Array.isArray(raw.styleReferences) ? raw.styleReferences : [],
+        dialogueStyles: Array.isArray(raw.dialogueStyles) ? raw.dialogueStyles : [],
+        knowledgeBase: Array.isArray(raw.knowledgeBase) ? raw.knowledgeBase : [],
+        agentHistory: Array.isArray(raw.agentHistory) ? raw.agentHistory : [],
+        chatHistory: Array.isArray(raw.chatHistory) ? raw.chatHistory : [],
+        settings: raw.settings ?? { pageWidth: 800, panelSpacing: 0, maxConcurrentGenerations: 1 },
+    } as Project;
+};
+
 // Helper to convert base64 to Blob safely
 const base64ToBlob = (base64: string, mimeType: string) => {
     try {
@@ -50,6 +79,13 @@ const base64ToBlob = (base64: string, mimeType: string) => {
 const uploadImageToStorage = async (base64: string, path: string): Promise<string | null> => {
     if (!base64 || typeof base64 !== 'string') return null;
     if (!base64.startsWith('data:image')) return base64; // Already a URL or invalid format
+
+    // Skip placeholders and truncated data URLs rather than spamming upload errors.
+    // A real PNG is way bigger than ~200 bytes; anything smaller is almost certainly
+    // a placeholder, a failed generation, or a cached corrupt entry.
+    const commaIdx = base64.indexOf(',');
+    if (commaIdx < 0 || base64.length - commaIdx - 1 < 200) return null;
+    if (/PLACEHOLDER/i.test(base64.slice(0, 120))) return null;
 
     try {
         const mimeTypeMatch = base64.match(/data:(.*?);/);
@@ -170,39 +206,40 @@ export const createNewProject = (username: string): Project => ({
 });
 
 export const getUserProjects = async (username: string): Promise<Project[]> => {
-    let projects: Project[] = [];
-    
-    // 1. CLOUD FIRST: Intentar cargar desde Supabase
-    if (username !== 'guest') {
-        try {
-            const { data, error } = await supabase
-                .from('projects')
-                .select('data')
-                .eq('user_id', username);
-                
-            if (!error && data) {
-                console.log("✅ Loaded projects from Supabase (Cloud)");
-                return data.map((row: any) => row.data);
-            } else if (error) {
-                if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
-                    console.warn("⚠️ Supabase unreachable (Offline Mode).");
-                } else {
-                    console.warn("⚠️ Supabase load error:", error.message);
-                    if (error.code === '42P01') {
-                        showToast("Falta configurar la Base de Datos en Supabase.", "error");
-                    }
+    // 1. CLOUD FIRST: Supabase. RLS already constrains rows to auth.uid(), but we
+    // also pass `.eq('user_id', username)` as defense-in-depth against policy
+    // drift. With the guest-mode loophole removed, `username` is always a real
+    // Supabase auth user id.
+    try {
+        const { data, error } = await supabase
+            .from('projects')
+            .select('data')
+            .eq('user_id', username);
+
+        if (!error && data) {
+            console.log("✅ Loaded projects from Supabase (Cloud)");
+            return data.map((row: any) => normalizeProject(row.data));
+        } else if (error) {
+            if (error.message.includes('Failed to fetch') || error.message.includes('NetworkError')) {
+                console.warn("⚠️ Supabase unreachable (Offline Mode).");
+            } else {
+                console.warn("⚠️ Supabase load error:", error.message);
+                if (error.code === '42P01') {
+                    showToast("Falta configurar la Base de Datos en Supabase.", "error");
                 }
             }
-        } catch (e) {
-            console.warn("⚠️ Supabase connection failed:", e);
         }
+    } catch (e) {
+        console.warn("⚠️ Supabase connection failed:", e);
     }
 
     // 2. FALLBACK LOCAL: Si falla la nube, usar local
     console.log("📂 Loading from Local DB (Fallback/Offline)");
     try {
         const allLocal = await getAllFromDB();
-        const localProjects = allLocal.filter((p: Project) => p.id.startsWith(`proj-${username}`));
+        const localProjects = allLocal
+            .filter((p: Project) => p.id.startsWith(`proj-${username}`))
+            .map(normalizeProject);
         if (localProjects.length > 0) {
             showToast("Modo Offline: Usando copia local.", "info");
             return localProjects;
@@ -210,7 +247,7 @@ export const getUserProjects = async (username: string): Promise<Project[]> => {
     } catch (localErr) {
         console.error("Critical: Failed to load from both Cloud and Local DB");
     }
-    
+
     return [];
 };
 
@@ -231,12 +268,9 @@ export const saveProjectToStorage = async (username: string, project: Project) =
         projectToSave = { ...project }; // Fallback a Base64 si falla
     }
 
-    // 3. Guardar en Supabase (Sync Principal)
-    if (username === 'guest') {
-        console.log("Guest mode: Skipping Supabase save.");
-        return;
-    }
-
+    // 3. Guardar en Supabase (Sync Principal). Safe upsert: explicit onConflict
+    // on the primary key prevents duplicate-row 409s on concurrent saves and
+    // makes the intent unambiguous (CLAUDE.md rule 2).
     try {
         const { error } = await supabase
             .from('projects')
@@ -246,7 +280,7 @@ export const saveProjectToStorage = async (username: string, project: Project) =
                 title: project.title,
                 data: projectToSave,
                 updated_at: new Date().toISOString()
-            });
+            }, { onConflict: 'id' });
 
         if (error) {
             // Handle Network Errors / Offline gracefully
@@ -276,20 +310,21 @@ export const saveProjectToStorage = async (username: string, project: Project) =
 };
 
 export const deleteProject = async (projectId: string, username?: string) => {
-    // 1. Borrar Nube
-    if (username !== 'guest') {
-        try {
-            const { error } = await supabase
-                .from('projects')
-                .delete()
-                .eq('id', projectId);
-                
-            if (error) throw error;
-        } catch (error: any) {
-            if (!error.message?.includes('Failed to fetch')) {
-                console.error("Failed to delete cloud project", error);
-                showToast("Error borrando de la nube.", 'error');
-            }
+    // 1. Borrar Nube. RLS scopes this to auth.uid() already, but we add an
+    // explicit user_id filter as defense-in-depth against RLS policy drift.
+    try {
+        let query = supabase
+            .from('projects')
+            .delete()
+            .eq('id', projectId);
+        if (username) query = query.eq('user_id', username);
+        const { error } = await query;
+
+        if (error) throw error;
+    } catch (error: any) {
+        if (!error.message?.includes('Failed to fetch')) {
+            console.error("Failed to delete cloud project", error);
+            showToast("Error borrando de la nube.", 'error');
         }
     }
 

@@ -15,14 +15,17 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
-        if (!email.trim() || !password.trim()) return;
+        // SECURITY: never trim passwords — `"abc "` and `"abc"` are different
+        // credentials, and silently coercing them produces confusing auth
+        // failures and can mask typos. Only trim email.
+        if (!email.trim() || !password) return;
 
         setIsLoading(true);
         try {
             if (isSignUp) {
                 const { data, error } = await supabase.auth.signUp({
                     email: email.trim(),
-                    password: password.trim(),
+                    password,
                 });
                 if (error) throw error;
                 if (data.user) {
@@ -32,7 +35,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
             } else {
                 const { data, error } = await supabase.auth.signInWithPassword({
                     email: email.trim(),
-                    password: password.trim(),
+                    password,
                 });
                 if (error) throw error;
                 if (data.user) {
@@ -42,6 +45,30 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
         } catch (error: any) {
             console.error("Auth error:", error);
             showToast(error.message || "Error de autenticación", "error");
+        } finally {
+            setIsLoading(false);
+        }
+    };
+
+    // SECURITY (CLAUDE.md rule 1): anonymous access must use a real Supabase
+    // JWT (signInAnonymously) so RLS / Edge Function auth works. The fake
+    // 'guest' userId that used to exist bypassed auth entirely — removed.
+    const handleAnonymous = async () => {
+        setIsLoading(true);
+        try {
+            const { data, error } = await supabase.auth.signInAnonymously();
+            if (error) throw error;
+            if (data.user) {
+                onLogin(data.user.id, data.user.email || 'anonymous');
+            }
+        } catch (error: any) {
+            console.error("Anonymous sign-in error:", error);
+            showToast(
+                error.message?.includes('disabled')
+                    ? 'El acceso anónimo está deshabilitado en este proyecto. Crea una cuenta.'
+                    : (error.message || 'Error de autenticación'),
+                'error',
+            );
         } finally {
             setIsLoading(false);
         }
@@ -57,7 +84,7 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                     <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 shadow-2xl shadow-violet-500/20 mb-6">
                         <span className="text-3xl font-bold text-white">M</span>
                     </div>
-                    <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Manhwa AI Studio</h1>
+                    <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Manwha Studio AI</h1>
                     <p className="text-gray-400 text-sm">{isSignUp ? 'Crea una cuenta para guardar tus proyectos en la nube.' : 'Inicia sesión para acceder a tu espacio de trabajo.'}</p>
                 </div>
 
@@ -121,12 +148,13 @@ export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
                             <div className="flex-grow border-t border-white/10"></div>
                         </div>
 
-                        <button 
-                            type="button" 
-                            onClick={() => onLogin('guest', 'guest')}
-                            className="text-sm font-semibold text-gray-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 py-3 rounded-xl border border-white/5"
+                        <button
+                            type="button"
+                            onClick={handleAnonymous}
+                            disabled={isLoading}
+                            className="text-sm font-semibold text-gray-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 py-3 rounded-xl border border-white/5 disabled:opacity-50"
                         >
-                            Continuar sin cuenta (Modo Local)
+                            Continuar como invitado
                         </button>
                     </div>
                     

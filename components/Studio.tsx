@@ -43,7 +43,7 @@ interface StudioProps {
 
 export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle, onExit }) => {
     const { project, updateProject } = useProject();
-    const [activeChapterId, setActiveChapterId] = useState(() => project.chapters[0]?.id || null);
+    const [activeChapterId, setActiveChapterId] = useState(() => project.chapters?.[0]?.id || null);
     const [isCoverModalOpen, setCoverModalOpen] = useState(false);
     const [coverPrompt, setCoverPrompt] = useState('');
     const [selectedCoverCharIds, setSelectedCoverCharIds] = useState<string[]>([]);

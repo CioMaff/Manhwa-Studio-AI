@@ -15,20 +15,39 @@ interface DashboardProps {
 export const Dashboard: React.FC<DashboardProps> = ({ username, onSelectProject }) => {
     const [projects, setProjects] = useState<Project[]>([]);
     const [loading, setLoading] = useState(true);
+    const [isCreating, setIsCreating] = useState(false);
 
     useEffect(() => {
         const load = async () => {
             const userProjects = await getUserProjects(username);
-            setProjects(userProjects.sort((a, b) => parseInt(b.id.split('-').pop() || '0') - parseInt(a.id.split('-').pop() || '0')));
+            // Sort by trailing numeric suffix on id when present, otherwise treat as 0.
+            // Previously a malformed id produced NaN and silently scrambled the order.
+            const sorted = [...userProjects].sort((a, b) => {
+                const na = parseInt(a.id?.split('-').pop() ?? '', 10);
+                const nb = parseInt(b.id?.split('-').pop() ?? '', 10);
+                return (Number.isFinite(nb) ? nb : 0) - (Number.isFinite(na) ? na : 0);
+            });
+            setProjects(sorted);
             setLoading(false);
         };
         load();
     }, [username]);
 
     const handleCreate = async () => {
-        const newProject = createNewProject(username);
-        await saveProjectToStorage(username, newProject);
-        setProjects([newProject, ...projects]);
+        // Double-click / double-tap guard: the old code also read a stale `projects`
+        // from closure, so a second rapid click overwrote the first insert.
+        if (isCreating) return;
+        setIsCreating(true);
+        try {
+            const newProject = createNewProject(username);
+            await saveProjectToStorage(username, newProject);
+            setProjects(prev => [newProject, ...prev]);
+        } catch (err) {
+            console.error('Failed to create project', err);
+            showToast('No se pudo crear el proyecto.', 'error');
+        } finally {
+            setIsCreating(false);
+        }
     };
 
     const handleDelete = async (e: React.MouseEvent, projectId: string) => {
@@ -57,22 +76,24 @@ export const Dashboard: React.FC<DashboardProps> = ({ username, onSelectProject 
             <div className="max-w-7xl mx-auto">
                 <div className="flex justify-between items-end mb-10">
                     <div>
-                        <h2 className="text-4xl font-black text-white tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">Manhwa AI Studio</h2>
+                        <h2 className="text-4xl font-black text-white tracking-tight bg-clip-text text-transparent bg-gradient-to-r from-white to-gray-400">Manwha Studio AI</h2>
                         <p className="text-gray-400 mt-2 text-sm">Create professional webtoons with Nano Banana Pro (Gemini 3.0).</p>
                     </div>
-                    <button 
-                        onClick={handleCreate} 
-                        className="flex items-center gap-2 px-5 py-2.5 bg-white text-black hover:bg-gray-200 rounded-xl font-semibold shadow-[0_0_20px_rgba(255,255,255,0.1)] transition-all transform hover:scale-[1.02] active:scale-[0.98]"
+                    <button
+                        onClick={handleCreate}
+                        disabled={isCreating}
+                        className="flex items-center gap-2 px-5 py-2.5 bg-white text-black hover:bg-gray-200 disabled:opacity-50 disabled:cursor-wait rounded-xl font-semibold shadow-[0_0_20px_rgba(255,255,255,0.1)] transition-all transform hover:scale-[1.02] active:scale-[0.98]"
                     >
-                        <PlusIcon className="w-4 h-4" /> New Project
+                        <PlusIcon className="w-4 h-4" /> {isCreating ? 'Creating…' : 'New Project'}
                     </button>
                 </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-6">
                     {/* Create New Card (Quick Access) */}
-                    <button 
-                        onClick={handleCreate} 
-                        className="group aspect-[2/3] rounded-2xl border border-dashed border-white/10 bg-white/5 hover:bg-white/[0.07] hover:border-white/20 transition-all flex flex-col items-center justify-center gap-4"
+                    <button
+                        onClick={handleCreate}
+                        disabled={isCreating}
+                        className="group aspect-[2/3] rounded-2xl border border-dashed border-white/10 bg-white/5 hover:bg-white/[0.07] hover:border-white/20 disabled:opacity-40 disabled:cursor-wait transition-all flex flex-col items-center justify-center gap-4"
                     >
                         <div className="w-12 h-12 rounded-full bg-gradient-to-br from-violet-600/20 to-indigo-600/20 flex items-center justify-center group-hover:scale-110 transition-transform duration-300">
                             <PlusIcon className="w-6 h-6 text-violet-400" />

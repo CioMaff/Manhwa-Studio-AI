@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Studio } from './components/Studio';
 import { Auth } from './components/Auth';
 import { Dashboard } from './components/Dashboard';
@@ -68,7 +68,6 @@ function App() {
   const [currentView, setCurrentView] = useState<ViewState>('auth');
   const [project, setProject] = useState<Project | null>(null);
   const [toasts, setToasts] = useState<Toast[]>([]);
-  const isGuestModeRef = useRef(false);
   const [confirmationProps, setConfirmationProps] = useState<ConfirmationOptions & { isOpen: boolean }>({
     isOpen: false,
     title: '',
@@ -76,6 +75,9 @@ function App() {
   });
 
   // PERSISTENT SESSION LOGIC (Supabase Auth)
+  // SECURITY: the old fake-'guest' userId that bypassed onAuthStateChange has
+  // been removed. Every authenticated state is backed by a real Supabase JWT
+  // (including anonymous sign-ins). RLS and Edge Functions can now be trusted.
   useEffect(() => {
       const checkSession = async () => {
           try {
@@ -92,11 +94,10 @@ function App() {
               setIsAuthLoading(false);
           }
       };
-      
+
       checkSession();
 
       const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
-          if (isGuestModeRef.current) return;
           if (session?.user) {
               setUser({ id: session.user.id, email: session.user.email || '' });
               setCurrentView('dashboard');
@@ -117,6 +118,12 @@ function App() {
   }, []);
 
   const providerValue = useMemo(() => (project ? { project, updateProject } : null), [project, updateProject]);
+
+  // Stable identity + no-op guard so Studio's effect doesn't see a new function
+  // every render (an inline arrow would cause an infinite setProject -> re-render loop).
+  const setProjectTitle = useCallback((title: string) => {
+    setProject(prev => (!prev || prev.title === title ? prev : { ...prev, title }));
+  }, []);
 
   const addToast = useCallback((message: string, type: Toast['type']) => {
     setToasts((prev) => [...prev, { id: Date.now(), message, type }]);
@@ -144,11 +151,8 @@ function App() {
   }, [addToast]);
 
   const handleLogin = (userId: string, email: string) => {
-      if (userId === 'guest') {
-          isGuestModeRef.current = true;
-      } else {
-          isGuestModeRef.current = false;
-      }
+      // userId here is always a real Supabase auth.users.id — the fake 'guest'
+      // path was removed. Anonymous users still get a real UUID.
       setUser({ id: userId, email });
       setCurrentView('dashboard');
   };
@@ -160,14 +164,18 @@ function App() {
         confirmButtonClass: 'bg-red-500 hover:bg-red-600 focus:ring-red-500'
       });
       if (confirmed) {
-        if (!isGuestModeRef.current) {
-            try {
-                await supabase.auth.signOut();
-            } catch (err: any) {
-                console.warn("Supabase signout issue:", err.message);
-            }
+        try {
+            await supabase.auth.signOut();
+        } catch (err: any) {
+            console.warn("Supabase signout issue:", err.message);
         }
-        isGuestModeRef.current = false;
+        // Clear per-user local cache so the next browser user can't see the
+        // previous (possibly anonymous) session's projects / assets.
+        try {
+            indexedDB.deleteDatabase('ManhwaStudioDB');
+        } catch (err) {
+            console.warn('Failed to clear local IndexedDB on logout', err);
+        }
         setUser(null);
         setProject(null);
         setCurrentView('auth');
@@ -227,9 +235,9 @@ function App() {
           case 'editor':
               return project && providerValue ? (
                   <ProjectProvider value={providerValue}>
-                      <Studio 
-                          username={user.id} 
-                          setProjectTitle={(t) => setProject(p => p ? ({...p, title: t}) : null)} 
+                      <Studio
+                          username={user.id}
+                          setProjectTitle={setProjectTitle}
                           onExit={handleBackToLanding}
                       />
                   </ProjectProvider>
@@ -266,8 +274,8 @@ function App() {
                     <span className="text-white font-bold text-lg">M</span>
                  </div>
                  <h1 className="text-xl font-bold tracking-tight">
-                    <span className="text-white">Manhwa AI</span>
-                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-indigo-400"> Studio</span>
+                    <span className="text-white">Manwha</span>
+                    <span className="text-transparent bg-clip-text bg-gradient-to-r from-violet-400 to-indigo-400"> Studio AI</span>
                  </h1>
                  <span className="text-[10px] font-bold uppercase tracking-wider bg-white/5 text-white/50 px-2 py-0.5 rounded-full border border-white/5 ml-2">Pro</span>
             </div>
