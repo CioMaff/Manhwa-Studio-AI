@@ -7,7 +7,16 @@ import { MANHWA_EXPERT_CONTEXT } from "../utils/manhwaContext";
 import { layouts } from "../components/layouts";
 import { logger } from "../systems/logger";
 
-const getAI = () => new GoogleGenAI({ apiKey: 'AIzaSyC1YTpf8DWfniO7dIyTVnVSYwVTTdDVxrw' || process.env.API_KEY || process.env.GEMINI_API_KEY });
+const getAI = () => {
+    const apiKey = process.env.API_KEY || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        throw new Error(
+            "Missing Gemini API key. Set GEMINI_API_KEY (or API_KEY) in your environment. " +
+            "Never hardcode keys in client code — they get leaked on every deploy."
+        );
+    }
+    return new GoogleGenAI({ apiKey });
+};
 
 // --- MODELS (NANO BANANA PRO CONFIGURATION) ---
 const MODEL_TEXT = 'gemini-3.1-pro-preview'; 

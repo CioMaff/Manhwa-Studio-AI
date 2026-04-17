@@ -249,7 +249,7 @@ export const ScenePlannerModal: React.FC<ScenePlannerModalProps> = ({ isOpen, on
 
                          <div>
                              <label className="text-xs font-bold text-gray-500 uppercase mb-2 block tracking-wider">Densidad ({panelCount} Viñetas)</label>
-                             <input type="range" min="3" max="12" value={panelCount} onChange={(e) => setPanelCount(parseInt(e.target.value))} className="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-violet-500" />
+                             <input type="range" min="1" max="30" value={panelCount} onChange={(e) => setPanelCount(parseInt(e.target.value))} className="w-full h-1.5 bg-zinc-700 rounded-lg appearance-none cursor-pointer accent-violet-500" />
                              <div className="flex justify-between text-[9px] text-gray-600 mt-1 font-mono">
                                  <span>CORTA</span>
                                  <span>EPISODIO COMPLETO</span>

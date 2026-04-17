@@ -69,6 +69,11 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle, onExi
     const [showLiveAssistant, setShowLiveAssistant] = useState(false);
     const [saveStatus, setSaveStatus] = useState<'saved' | 'saving'>('saved');
     const coverArtRef = useRef<HTMLButtonElement>(null);
+    const latestProjectRef = useRef(project);
+
+    useEffect(() => {
+        latestProjectRef.current = project;
+    }, [project]);
 
     useEffect(() => {
         localStorage.setItem('gemini-manhwa-version', APP_VERSION);
@@ -85,6 +90,31 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle, onExi
             return () => clearTimeout(saveDebounce);
         }
     }, [project, username]);
+
+    // Flush on unmount — guarantees pending debounced edits are persisted when the
+    // user navigates away via React state change (e.g. back to landing).
+    useEffect(() => {
+        return () => {
+            const p = latestProjectRef.current;
+            if (p) {
+                saveProjectToStorage(username, p);
+            }
+        };
+    }, [username]);
+
+    // Flush on tab close / refresh.
+    useEffect(() => {
+        const flush = () => {
+            const p = latestProjectRef.current;
+            if (p) saveProjectToStorage(username, p);
+        };
+        window.addEventListener('beforeunload', flush);
+        window.addEventListener('pagehide', flush);
+        return () => {
+            window.removeEventListener('beforeunload', flush);
+            window.removeEventListener('pagehide', flush);
+        };
+    }, [username]);
     
     useEffect(() => {
         const handleAgentMessage = (e: Event) => {
