@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useLayoutEffect, useCallback, useEffect } from 'react';
 import type { ChatMessage, AgentFunctionCall, ContextPillItem, SubPanel } from '../types';
 import { chatWithAgent } from '../services/geminiService';
@@ -6,7 +7,7 @@ import { ContextPill } from './ContextPill';
 import { TrashIcon } from './icons/TrashIcon';
 import { useSpeechRecognition } from '../hooks/useSpeechRecognition';
 import { MicIcon } from './icons/MicIcon';
-import { showConfirmation } from '../systems/uiSystem';
+import { showConfirmation, showToast } from '../systems/uiSystem';
 import { useProject } from '../contexts/ProjectContext';
 
 interface AssistantPanelProps {
@@ -19,8 +20,10 @@ interface AssistantPanelProps {
 }
 
 const BoldRenderer = ({ text }: { text: string }) => {
-    const parts = text.split(/(\*\*.*?\*\*|\*.*?\*|`.*?`)/g);
-    return (<p className="whitespace-pre-wrap leading-relaxed">{parts.map((part, index) => {
+    if (!text) return null;
+    // Updated Regex to correctly handle bold (**), italic (*), and code (`) without double escaping issues
+    const parts = text.split(/(\*\*.*?\*\*|\*.*?\*|`[^`]*`)/g);
+    return (<p className="whitespace-pre-wrap leading-relaxed text-sm">{parts.map((part, index) => {
         if (part.startsWith('**') && part.endsWith('**')) {
             return <strong key={index} className="text-white font-bold">{part.slice(2, -2)}</strong>;
         }
@@ -57,7 +60,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isAgentMode, set
     useLayoutEffect(() => {
         const chatContainer = chatContainerRef.current;
         if (chatContainer) {
-            const isScrolledToBottom = chatContainer.scrollHeight - chatContainer.scrollTop <= chatContainer.clientHeight + 50; // Add tolerance
+            const isScrolledToBottom = chatContainer.scrollHeight - chatContainer.scrollTop <= chatContainer.clientHeight + 100;
             if (isScrolledToBottom) {
                 chatContainer.scrollTop = chatContainer.scrollHeight;
             }
@@ -101,7 +104,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isAgentMode, set
         const userMessage: ChatMessage = { 
             id: Date.now().toString(), 
             role: 'user', 
-            text: `${input}`,
+            text: input,
             contextPills: contextPills,
             images: isAgentMode ? selectedSubPanels.filter(sp => sp.imageUrl).map(sp => sp.imageUrl!) : [],
             selectedSubPanelIds: isAgentMode ? selectedSubPanelIds : undefined,
@@ -115,13 +118,13 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isAgentMode, set
 
         try {
             const { text, functionCall } = await chatWithAgent(newMessages, project);
-            const cleanText = text;
+            const cleanText = text || "I couldn't generate a response. Please check your connection or try again.";
             
             const modelMessage: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: cleanText, functionCall };
             setMessages(prev => [...prev, modelMessage]);
         } catch (error) {
             console.error("Error sending message:", error);
-            const errorMessage: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: "Lo siento, he encontrado un error. Por favor, revisa la consola para más detalles." };
+            const errorMessage: ChatMessage = { id: (Date.now() + 1).toString(), role: 'model', text: "Error: Could not connect to Nano Banana Pro. Please try again." };
             setMessages(prev => [...prev, errorMessage]);
         } finally {
             setIsLoading(false);
@@ -217,8 +220,8 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isAgentMode, set
                                 <svg className="w-6 h-6 text-violet-400" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" /></svg>
                             )}
                         </div>
-                        <p className="text-sm font-medium text-gray-300">Modo {isAgentMode ? 'Agente' : 'Chat'} listo</p>
-                        <p className="text-xs mt-1">{isAgentMode ? 'Selecciona una viñeta y pídeme que la edite o continúe.' : 'Pregúntame ideas para tu historia.'}</p>
+                        <p className="text-sm font-medium text-gray-300">Hola, soy Nano Banana Pro.</p>
+                        <p className="text-xs mt-1">{isAgentMode ? 'Agente Manhwa experto (Gemini 3.0). Selecciona una viñeta para empezar.' : 'Pregúntame ideas para tu historia.'}</p>
                     </div>
                 )}
             </div>
@@ -254,7 +257,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isAgentMode, set
                             value={input} 
                             onChange={e => setInput(e.target.value)} 
                             onKeyDown={e => { if(e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSendMessage(); }}} 
-                            placeholder={isAgentMode ? 'Instruye al Agente...' : 'Escribe aquí...'} 
+                            placeholder={isAgentMode ? 'Instruye a Nano...' : 'Escribe aquí...'} 
                             className="w-full bg-transparent focus:outline-none text-sm text-gray-200 placeholder-gray-600 resize-none max-h-24 py-2" 
                             rows={1}
                         />

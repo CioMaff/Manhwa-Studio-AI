@@ -1,3 +1,4 @@
+
 import React, { useState, useEffect } from 'react';
 import type { Project } from '../types';
 import { EditIcon } from './icons/EditIcon';
@@ -30,7 +31,6 @@ export const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, usernam
 
     return (
         <div className="h-full overflow-y-auto bg-background text-white relative">
-            {/* Cinematic Background Blur */}
             <div className="absolute top-0 left-0 right-0 h-[500px] bg-gradient-to-b from-violet-900/20 to-background pointer-events-none" />
             <div className="absolute top-0 left-0 w-full h-[500px] opacity-10 pointer-events-none">
                 <img src={project.coverImage} className="w-full h-full object-cover blur-3xl scale-110" />
@@ -42,15 +42,13 @@ export const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, usernam
                 </button>
 
                 <div className="flex flex-col md:flex-row gap-12 items-start">
-                    {/* Cover Art Section */}
                     <div className="w-full md:w-[320px] flex-shrink-0">
-                        <div className="aspect-[2/3] rounded-2xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10 relative group">
+                        <div className="aspect-[9/16] rounded-2xl overflow-hidden shadow-[0_20px_50px_rgba(0,0,0,0.5)] border border-white/10 relative group">
                              <img src={project.coverImage} alt="Cover" className="w-full h-full object-cover" />
                              <div className="absolute inset-0 bg-gradient-to-t from-black/50 to-transparent" />
                         </div>
                     </div>
 
-                    {/* Details Section */}
                     <div className="flex-1 flex flex-col pt-4">
                         <div className="mb-8">
                             <input 
@@ -60,7 +58,7 @@ export const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, usernam
                                 onBlur={handleTitleSave}
                                 className="w-full bg-transparent text-5xl md:text-7xl font-black text-white border-b-2 border-transparent hover:border-white/10 focus:border-violet-500 focus:outline-none pb-4 transition-all tracking-tight"
                             />
-                            <p className="text-gray-400 mt-4 text-lg">Last updated just now</p>
+                            <p className="text-gray-400 mt-4 text-lg">Manhwa Project • {project.chapters.length} Chapters</p>
                         </div>
 
                         <div className="flex gap-6 mb-12">
@@ -78,7 +76,6 @@ export const ProjectLanding: React.FC<ProjectLandingProps> = ({ project, usernam
                                     <span className="w-2 h-8 bg-gradient-to-b from-violet-500 to-indigo-500 rounded-full"></span>
                                     Episodes
                                 </h3>
-                                <span className="px-3 py-1 bg-white/5 rounded-full text-xs font-bold text-gray-400 uppercase tracking-wider">{project.chapters.length} Chapters</span>
                             </div>
                             <div className="space-y-3 max-h-[400px] overflow-y-auto pr-2 custom-scrollbar">
                                 {project.chapters.map((chapter, idx) => (

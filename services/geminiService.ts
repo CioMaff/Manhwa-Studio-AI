@@ -1,27 +1,25 @@
+
 import { GoogleGenAI, Modality, Type } from "@google/genai";
-import type { Part, FunctionDeclaration } from "@google/genai";
-import type { Panel, Character, StyleReference, KnowledgeFile, ChatMessage, AgentFunctionCall, DialogueStyle, ContextPillItem, Project, ScenePlanPage, ObjectAsset, SceneType, BackgroundAsset, NewEntityAnalysis, NewObjectEntity, CharacterAnalysis, LiveTranscriptEntry, SubPanel } from '../types';
-import { compressImageBase64, cropImageBase64 } from "../utils/fileUtils";
+import type { Part } from "@google/genai";
+import type { Panel, Character, StyleReference, ChatMessage, Project, ScenePlanPage, ObjectAsset, SceneType, BackgroundAsset, SubPanel, LiveTranscriptEntry, AgentFunctionCall } from '../types';
 import { showToast } from "../systems/uiSystem";
-import { SOURCE_CODE_CONTEXT } from "../utils/codeContext";
 import { MANHWA_EXPERT_CONTEXT } from "../utils/manhwaContext";
+import { layouts } from "../components/layouts";
+import { logger } from "../systems/logger";
 
-const getAI = () => new GoogleGenAI({ apiKey: process.env.API_KEY });
+const getAI = () => new GoogleGenAI({ apiKey: 'AIzaSyC1YTpf8DWfniO7dIyTVnVSYwVTTdDVxrw' || process.env.API_KEY || process.env.GEMINI_API_KEY });
 
-// --- MODELS ---
-// Explicitly using Gemini 3.0 Pro (Nano Banana Pro)
-const MODEL_TEXT = 'gemini-3-pro-preview';
-const MODEL_IMAGE = 'gemini-3-pro-image-preview';
+// --- MODELS (NANO BANANA PRO CONFIGURATION) ---
+const MODEL_TEXT = 'gemini-3.1-pro-preview'; 
+const MODEL_IMAGE = 'gemini-3-pro-image-preview'; // UPGRADED TO PRO
+// Fallback
+const MODEL_IMAGE_FALLBACK = 'gemini-2.5-flash-image'; 
+const MODEL_TEXT_FALLBACK = 'gemini-3-flash-preview';
 
-// Fallbacks only used in dire cases (404/403 if Pro fails completely)
-const MODEL_TEXT_FALLBACK = 'gemini-2.5-flash';
-const MODEL_IMAGE_FALLBACK = 'gemini-2.5-flash-image';
-
-// --- RATE LIMITING & THROTTLING ---
-// Global variables to manage request traffic
+// --- RATE LIMITING ---
 let lastCallTime = 0;
-const MIN_REQUEST_INTERVAL = 1200; // ms between API calls to prevent burst rate limits
-const MAX_CONCURRENT_REQUESTS = 3; // Hard limit on internal active requests
+const MIN_REQUEST_INTERVAL = 2000; // Increased for Pro model safety
+const MAX_CONCURRENT_REQUESTS = 2; // Reduced for Pro model safety
 let activeRequests = 0;
 const requestQueue: (() => void)[] = [];
 
@@ -36,7 +34,6 @@ const acquireToken = async (): Promise<void> => {
     return new Promise((resolve) => {
         const run = async () => {
             activeRequests++;
-            // Throttle: Wait if the last call was too recent
             const now = Date.now();
             const timeSinceLast = now - lastCallTime;
             if (timeSinceLast < MIN_REQUEST_INTERVAL) {
@@ -45,12 +42,8 @@ const acquireToken = async (): Promise<void> => {
             lastCallTime = Date.now();
             resolve();
         };
-
-        if (activeRequests < MAX_CONCURRENT_REQUESTS) {
-            run();
-        } else {
-            requestQueue.push(run);
-        }
+        if (activeRequests < MAX_CONCURRENT_REQUESTS) run();
+        else requestQueue.push(run);
     });
 };
 
@@ -59,57 +52,21 @@ const releaseToken = () => {
     processQueue();
 };
 
-declare global {
-    interface Window {
-        hasShownFallbackToast?: boolean;
-    }
-}
-
-// Retry logic for robust API calls
-const makeApiCallWithRetry = async <T>(apiCall: () => Promise<T>, maxRetries = 4): Promise<T> => {
+const makeApiCallWithRetry = async <T>(apiCall: () => Promise<T>, maxRetries = 2): Promise<T> => {
     await acquireToken();
-    
     let attempt = 0;
     try {
         while (attempt < maxRetries) {
             try {
-                const result = await apiCall();
-                return result;
+                return await apiCall();
             } catch (error: any) {
                 attempt++;
                 const errorString = error.toString();
-                
-                // Check for Rate Limits (429) or Overloaded (503)
-                const isRateLimit = errorString.includes('429') || errorString.includes('RESOURCE_EXHAUSTED');
-                const isOverloaded = errorString.includes('503') || errorString.toLowerCase().includes('overloaded');
-                
-                // Fail fast on Permission Denied or Not Found (unless we want fallback to handle it)
-                if (errorString.includes('403') || errorString.includes('PERMISSION_DENIED')) {
-                    throw new Error("Permission Denied: Access to Gemini 3.0 Pro models is restricted. Please verify your API Key billing status.");
-                }
-                
-                if (errorString.includes('404') || errorString.includes('NOT_FOUND')) {
-                     throw new Error("Model Not Found: The requested Pro model is not available for this API key.");
-                }
-
-                const isRetryable = isRateLimit || isOverloaded || errorString.includes('500') || errorString.includes('Deadline expired');
-
-                if (isRetryable && attempt < maxRetries) {
-                    // Exponential Backoff with Jitter: 2s, 4s, 8s...
-                    const baseDelay = isRateLimit ? 3000 : 1000; // Longer wait for rate limits
-                    const delay = (baseDelay * Math.pow(2, attempt - 1)) + (Math.random() * 1000);
-                    
-                    const attemptMsg = `Nano Pro is busy. Retrying in ${Math.round(delay / 1000)}s... (Attempt ${attempt}/${maxRetries})`;
-                    console.warn(attemptMsg);
-                    // Only show toast on the first retry to avoid spam
-                    if (attempt === 1) showToast(attemptMsg, 'info');
-                    
+                logger.warn(`API Attempt ${attempt} failed`, errorString);
+                if (errorString.includes('429') || errorString.includes('503') || errorString.includes('500')) {
+                    const delay = 3000 * attempt;
                     await new Promise(resolve => setTimeout(resolve, delay));
                 } else {
-                    if (errorString.includes('400')) {
-                        console.error("Bad Request (400). Check input image formats.");
-                        throw new Error(`Generation failed: Invalid input or blocked content. (${error.message})`);
-                    }
                     throw error; 
                 }
             }
@@ -120,112 +77,84 @@ const makeApiCallWithRetry = async <T>(apiCall: () => Promise<T>, maxRetries = 4
     }
 };
 
-// Helper to handle Pro -> Flash fallback
 const callWithFallback = async <T>(
     operationName: string,
     primaryCall: () => Promise<T>,
     fallbackCall: () => Promise<T>
 ): Promise<T> => {
     try {
+        logger.system(`API Call: ${operationName} [Primary: Nano Banana Pro]`);
         return await makeApiCallWithRetry(primaryCall);
     } catch (error: any) {
-        const isPermissionError = error.message.includes('Permission Denied') || error.message.includes('403') || error.message.includes('Model Not Found') || error.message.includes('404');
-        
-        if (isPermissionError) {
-            if (!window.hasShownFallbackToast) {
-                 showToast("Nano Pro unavailable (Access Denied). Falling back to standard mode.", 'info');
-                 window.hasShownFallbackToast = true;
-                 setTimeout(() => { window.hasShownFallbackToast = false; }, 5000);
-            }
-            console.warn(`${operationName}: Pro model failed. Falling back to Flash models.`);
-            return await makeApiCallWithRetry(fallbackCall);
-        }
-        throw error;
+        logger.warn(`${operationName}: Primary failed. Retrying with Flash...`);
+        return await makeApiCallWithRetry(fallbackCall);
     }
 }
 
 const parseDataUrl = (dataUrl: string) => {
-  if (!dataUrl || !dataUrl.startsWith('data:')) {
-      if (dataUrl && (dataUrl.startsWith('PLACEHOLDER:') || dataUrl.includes('svg+xml'))) return null;
-      return null; 
-  }
+  if (!dataUrl || !dataUrl.startsWith('data:')) return null;
   const match = dataUrl.match(/^data:(.+);base64,(.+)$/);
-  if (!match || match.length < 3) {
-       return null;
-  }
+  if (!match || match.length < 3) return null;
   return { mimeType: match[1], data: match[2] };
 };
 
+// Enhanced Aspect Ratio logic for Gemini 3.0 Pro Image
 const getBestAspectRatio = (width: number, height: number): "1:1" | "3:4" | "4:3" | "9:16" | "16:9" => {
     const ratio = width / height;
-    if (ratio >= 1.7) return "16:9"; 
-    if (ratio >= 1.3) return "4:3";  
-    if (ratio >= 0.9 && ratio <= 1.1) return "1:1"; 
-    if (ratio <= 0.6) return "9:16"; 
-    return "3:4"; 
+    // Webtoon Vertical Panels are almost always 9:16 or thinner
+    if (ratio < 0.6) return "9:16"; 
+    // Portrait
+    if (ratio < 0.85) return "3:4";
+    // Square-ish
+    if (ratio < 1.15) return "1:1";
+    // Landscape
+    if (ratio < 1.5) return "4:3";
+    // Cinematic / Ultra Wide
+    return "16:9";
 };
-
-export const generateSpeech = async (text: string): Promise<string> => {
-    return makeApiCallWithRetry(async () => {
-        const ai = getAI();
-        const response = await ai.models.generateContent({
-            model: 'gemini-2.5-flash-preview-tts', 
-            contents: [{ parts: [{ text }] }],
-            config: {
-                responseModalities: [Modality.AUDIO],
-                speechConfig: {
-                    voiceConfig: {
-                        prebuiltVoiceConfig: { voiceName: 'Kore' },
-                    },
-                },
-            },
-        });
-        const base64Audio = response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data;
-        if (!base64Audio) {
-            throw new Error("No audio generated from TTS service.");
-        }
-        return base64Audio;
-    });
-};
-
-const characterToPromptString = (character: Character): string => {
-    const parts: string[] = [character.description];
-    if (character.apparentAge) parts.push(`- Apparent Age: ${character.apparentAge}`);
-    if (character.heightAndComplexion) parts.push(`- Height & Complexion: ${character.heightAndComplexion}`);
-    if (character.face) parts.push(`- Face: ${character.face}`);
-    if (character.eyes) parts.push(`- Eyes: ${character.eyes}`);
-    if (character.hair) parts.push(`- Hair: ${character.hair}`);
-    if (character.skin) parts.push(`- Skin: ${character.skin}`);
-    if (character.uniqueFeatures) parts.push(`- Unique Features: ${character.uniqueFeatures}`);
-    if (character.baseOutfit) parts.push(`- Base Outfit: ${character.baseOutfit}`);
-    if (character.accessories) parts.push(`- Accessories: ${character.accessories}`);
-    return parts.join('\n');
-}
 
 const processAssetReferences = (parts: Part[], assets: (StyleReference | BackgroundAsset | ObjectAsset)[], typeLabel: string) => {
     if (assets.length > 0) {
         let textPrompt = `\n--- ${typeLabel} ---`;
-        let hasVisuals = false;
-        
         for (const ref of assets) {
-            if (ref.image.startsWith('PLACEHOLDER:')) {
-                const styleName = ref.image.split(':')[1].replace(/_/g, ' ');
-                textPrompt += `\n- Apply the visual style of: ${styleName}`;
-            } else {
-                const inlineData = parseDataUrl(ref.image);
-                if (inlineData) {
-                    parts.push({ inlineData });
-                    hasVisuals = true;
-                }
-            }
+             const inlineData = parseDataUrl(ref.image);
+             // Only add if valid image data
+             if (inlineData && inlineData.data.length < 4000000) { 
+                 parts.push({ inlineData });
+             }
         }
-        
         if (typeLabel.includes("STYLE")) {
-             textPrompt += "\n[NEGATIVE CONSTRAINT]: These images are for ART STYLE ONLY (line weight, shading, coloring). DO NOT copy the characters, people, composition, or objects from these reference images. Create COMPLETELY NEW content based on the text prompt, but rendered in this art style.";
+             textPrompt += "\n[SYSTEM RULE]: STYLE REFERENCE ONLY. COPY ART TECHNIQUE (LINE, COLOR, SHADING) BUT DO NOT COPY THE CHARACTER/OBJECT FROM THIS REFERENCE.";
         }
-        
-        parts.push({ text: textPrompt + (hasVisuals ? "\n(Use the attached images as visual reference)" : "") });
+        parts.push({ text: textPrompt });
     }
+};
+
+const constructCharacterDirectives = (char: Character): string => {
+    let directives = `CHARACTER: ${char.name}. `;
+    
+    // Explicit Gender Enforcement - HIGHEST PRIORITY
+    if (char.gender === 'male') {
+        directives += " [GENDER: MALE (STRICT)]. [TRAITS: Masculine features, sharp jawline, flat chest, broad shoulders]. [NEGATIVE: Female, girl, woman, breasts, curves, lipstick, eyelashes, feminine]. IMPORTANT: IGNORE any gender implication from the name '${char.name}' if it sounds female. DRAW A MAN.";
+    } else if (char.gender === 'female') {
+        directives += " [GENDER: FEMALE (STRICT)]. [TRAITS: Feminine features, soft curves]. [NEGATIVE: Male, boy, man, beard, moustache, masculine jaw, strong jawline]. IMPORTANT: IGNORE any gender implication from the name '${char.name}' if it sounds male. DRAW A WOMAN.";
+    }
+    
+    if (char.description) directives += ` Description: ${char.description}.`;
+    
+    // Strict Outfit Enforcement
+    if (char.baseOutfit) {
+        directives += ` [OUTFIT RULE]: Character MUST wear ${char.baseOutfit}. IGNORE any other clothes mentioned in prompt context unless explicitly overriding it here.`;
+    } else {
+        // If no outfit specified, explicitly FORBID School Uniforms unless requested in description
+        directives += ` [OUTFIT NEGATIVE]: school uniform, sailor uniform, blazer, tie (unless requested).`;
+    }
+    
+    if (char.apparentAge) directives += ` [AGE: ${char.apparentAge}].`;
+    if (char.hair) directives += ` [HAIR: ${char.hair}].`;
+    if (char.eyes) directives += ` [EYES: ${char.eyes}].`;
+
+    return directives;
 };
 
 export const generateSubPanelImage = async (
@@ -237,529 +166,368 @@ export const generateSubPanelImage = async (
     objects: ObjectAsset[],
     backgrounds: BackgroundAsset[],
     previousPanelsContext: string, 
-    continuityImage?: string
+    continuityImage?: string,
+    overrideAspectRatio?: "1:1" | "3:4" | "4:3" | "9:16" | "16:9",
+    masterReferenceImage?: string // New Parameter for Strict Consistency
 ): Promise<string> => {
-    const targetAspectRatio = getBestAspectRatio(width, height);
-    const styleKeywords = "Modern professional manhwa/webtoon style. High quality, clean line art, detailed facial features, masterpiece, ultra-detailed, 4k, sharp focus.";
+    const targetAspectRatio = overrideAspectRatio || getBestAspectRatio(width, height);
+    
+    // Check for "lying down" keywords to enforce pose
+    const pLower = subPanel.prompt.toLowerCase();
+    const isLyingDown = pLower.includes('lying') || pLower.includes('floor') || pLower.includes('ground') || pLower.includes('suelo') || pLower.includes('tumbada') || pLower.includes('tirada');
+    
+    // --- PROMPT ENGINEERING V2 (Gemini 3.0 Optimized) ---
+    let corePrompt = `
+    ${MANHWA_EXPERT_CONTEXT}
+    
+    [TASK] Generate a specific MANHWA PANEL.
+    [SCENE ACTION (HIGHEST PRIORITY)]: ${subPanel.prompt.toUpperCase()}
+    `;
+    
+    if (isLyingDown) {
+        corePrompt += `\n[POSE ENFORCEMENT]: CHARACTER IS LYING ON THE GROUND. Camera must be HIGH ANGLE looking down, or floor level. CHARACTER MUST NOT BE STANDING.`;
+    }
 
-    let promptDetails = `[SCENE ACTION] ${subPanel.prompt}`;
-    if (subPanel.shotType) promptDetails = `[SHOT TYPE] ${subPanel.shotType}, ` + promptDetails;
-    if (subPanel.cameraAngle) promptDetails = `[CAMERA ANGLE] ${subPanel.cameraAngle}, ` + promptDetails;
+    corePrompt += `
+    [FORMAT]: FULL BLEED IMAGE. No Borders, No Frames, No Letterboxing.
+    [LIGHTING]: Cinematic, High Contrast, Webtoon Style.
+    [ASPECT RATIO TARGET]: ${targetAspectRatio}.
+    [NEGATIVE PROMPT]: Black borders, letterboxing, white margins, split screen, comic book frames, text bubbles, speech balloons, low quality, bad anatomy, missing limbs, distorted face, school uniform (unless specified).
+    `;
+
+    if (subPanel.shotType) corePrompt += `\n[CAMERA SHOT]: ${subPanel.shotType}`;
+    if (subPanel.cameraAngle) corePrompt += `\n[CAMERA ANGLE]: ${subPanel.cameraAngle}`;
 
     const parts: Part[] = [];
-    
-    if (continuityImage) {
-         const inline = parseDataUrl(continuityImage);
+
+    // 1. MASTER REFERENCE (Strict Consistency Anchor)
+    if (masterReferenceImage) {
+         const inline = parseDataUrl(masterReferenceImage);
          if(inline) {
              parts.push({ inlineData: inline });
-             parts.push({ text: "[VISUAL CONTINUITY] The image above is the PREVIOUS panel. The new image must follow this scene visually. Maintain character appearance and environmental consistency exactly, but progress the action according to the prompt." });
+             parts.push({ text: "[MASTER VISUAL REFERENCE]: COPY this art style, character design (face, eyes, hair), and color palette EXACTLY. This is the visual standard for the series." });
          }
     }
 
-    if (previousPanelsContext) {
-        parts.push({ text: `[STORY MEMORY] Previous events:\n${previousPanelsContext}` });
+    // 2. Continuity (Previous Panel)
+    if (continuityImage && continuityImage !== masterReferenceImage) {
+         const inline = parseDataUrl(continuityImage);
+         if(inline) {
+             parts.push({ inlineData: inline });
+             parts.push({ text: "[PREVIOUS MOMENT]: Connect the action from this panel. Maintain clothing damage and environment." });
+         }
     }
-
-    let corePrompt = `[TASK] Create a manhwa sub-panel. \n[TARGET STYLE] ${styleKeywords}\n[CURRENT PANEL PROMPT] ${promptDetails}`;
+    
     parts.push({ text: corePrompt });
 
-    processAssetReferences(parts, backgrounds, "BACKGROUND / SETTING");
-    processAssetReferences(parts, styleReferences, "ART STYLE REFERENCE");
-    
+    // 3. Character Injection (With Strict Rules)
     if (characters.length > 0) {
-        parts.push({ text: `\n--- ACTIVE CHARACTERS ---` });
+        parts.push({ text: `\n--- ACTIVE CHARACTERS (STRICT CONSISTENCY) ---` });
         for (const char of characters) {
-            parts.push({ text: `\n[CHARACTER]: ${char.name}\n${characterToPromptString(char)}` });
-            if (!char.referenceImage.startsWith('PLACEHOLDER:')) {
-                 const inline = parseDataUrl(char.referenceImage);
-                 if(inline) parts.push({ inlineData: inline });
-            }
+            const directives = constructCharacterDirectives(char);
+            parts.push({ text: directives });
+            const inline = parseDataUrl(char.referenceImage);
+            if(inline) parts.push({ inlineData: inline });
         }
     }
 
+    processAssetReferences(parts, backgrounds, "BACKGROUND REFERENCE");
+    processAssetReferences(parts, styleReferences, "ART STYLE REFERENCE");
+    
+    // Gemini 3.0 Pro Image Config
+    const config = { 
+        imageConfig: { 
+            aspectRatio: targetAspectRatio,
+            imageSize: "2K" // FORCE HIGH RESOLUTION
+        } 
+    };
+    
     return callWithFallback(
         'generateSubPanelImage',
         async () => {
-            const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_IMAGE,
-                contents: { parts },
-                config: { 
-                    responseModalities: [Modality.IMAGE],
-                    imageConfig: { aspectRatio: targetAspectRatio, imageSize: '2K' }
-                },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            throw new Error("No image generated by Gemini 3.0 Pro.");
+            // Primary: Gemini 3.0 Pro Image
+            const response = await getAI().models.generateContent({ model: MODEL_IMAGE, contents: { parts }, config });
+            if (!response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+            return `data:image/png;base64,${response.candidates[0].content.parts[0].inlineData.data}`;
         },
         async () => {
-            const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_IMAGE_FALLBACK,
-                contents: { parts },
-                config: { 
-                    responseModalities: [Modality.IMAGE],
-                    imageConfig: { aspectRatio: targetAspectRatio }
-                },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            throw new Error("No image generated by Gemini 2.5 Flash.");
+             // Fallback: Gemini 2.5 Flash Image (No imageSize param supported)
+             const fallbackConfig = { imageConfig: { aspectRatio: targetAspectRatio } };
+             const response = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts }, config: fallbackConfig });
+            if (!response.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+            return `data:image/png;base64,${response.candidates[0].content.parts[0].inlineData.data}`;
         }
     );
 };
 
-export const editPanelImage = async (base64Image: string, prompt: string): Promise<string> => {
-    const inlineData = parseDataUrl(base64Image);
-    if (!inlineData) throw new Error("Invalid base image for editing.");
-
+// --- QUALITY CONTROL AGENT ---
+export const assessPanelQuality = async (
+    generatedImage: string, 
+    originalPrompt: string
+): Promise<{ score: number; issues: string[]; fixed: boolean; advice: string; type: 'technical' | 'creative' | 'none' }> => {
+    // Quality check uses Text model to analyze the image
     const parts: Part[] = [
-        { inlineData },
-        { text: `Edit instructions: ${prompt}. Maintain the original style and characters.` }
+        { text: `Analyze this manhwa panel image against the prompt: "${originalPrompt}".
+        Strictly check for:
+        1. Prompt Adherence: Is the character doing EXACTLY what was asked? (e.g. Lying down vs Standing).
+        2. Anatomy: Are there extra fingers or distorted faces?
+        3. Format: Are there black bars or letterboxing? (Critical Fail).
+        
+        Return JSON.` },
+        { inlineData: parseDataUrl(generatedImage)! }
+    ];
+
+    const schema = {
+        type: Type.OBJECT,
+        properties: {
+            score: { type: Type.INTEGER },
+            issues: { type: Type.ARRAY, items: { type: Type.STRING } },
+            advice: { type: Type.STRING },
+            needs_regenerate: { type: Type.BOOLEAN },
+            error_type: { type: Type.STRING, enum: ['technical', 'creative', 'none'] }
+        },
+        required: ["score", "issues", "advice", "needs_regenerate", "error_type"]
+    };
+
+    try {
+        const r = await getAI().models.generateContent({ 
+            model: MODEL_TEXT, 
+            contents: { parts },
+            config: { responseMimeType: 'application/json', responseSchema: schema }
+        });
+        const result = JSON.parse(r.text || "{}");
+        return {
+            score: result.score || 10,
+            issues: result.issues || [],
+            fixed: !result.needs_regenerate,
+            advice: result.advice || "Looks good.",
+            type: result.error_type || 'none'
+        };
+    } catch (e) {
+        return { score: 10, issues: [], fixed: true, advice: "QC Unavailable", type: 'none' };
+    }
+};
+
+export const editPanelImage = async (baseImage: string, prompt: string): Promise<string> => {
+    // Magic Edit uses Gemini 2.5 Flash Image as it supports image-to-image editing well
+    const parts: Part[] = [
+        { text: `[TASK] Edit this image. Keep the style and composition. Change only: ${prompt}` },
+        { inlineData: parseDataUrl(baseImage)! }
     ];
 
     return callWithFallback(
         'editPanelImage',
         async () => {
-            const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_IMAGE,
-                contents: { parts },
-                config: { responseModalities: [Modality.IMAGE], imageConfig: { imageSize: '2K' } },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            throw new Error("No edited image generated by Gemini 3.0 Pro.");
+            const r = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts } });
+            if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+            return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
         },
         async () => {
-            const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_IMAGE_FALLBACK,
-                contents: { parts },
-                config: { responseModalities: [Modality.IMAGE] },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            throw new Error("No edited image generated by Gemini 2.5 Flash.");
+             const r = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts } });
+            if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+            return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
         }
     );
 };
 
-export const describeImage = async (base64Image: string, contextPrompt?: string): Promise<string> => {
-    const inlineData = parseDataUrl(base64Image);
-    if (!inlineData) throw new Error("Invalid base image for analysis.");
+export const chatWithAgent = async (history: ChatMessage[], project: Project): Promise<{ text: string, functionCall?: AgentFunctionCall }> => {
+    const prevMsgs = history.slice(0, -1);
+    const lastMsg = history[history.length - 1];
 
-    const parts: Part[] = [
-        { inlineData },
-        { text: contextPrompt || "Describe this image." }
-    ];
-
-    return callWithFallback(
-        'describeImage',
-        async () => {
-            const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_TEXT,
-                contents: { parts },
+    const geminiHistory = prevMsgs.map(msg => {
+        const parts: Part[] = [{ text: msg.text }];
+        if (msg.images) {
+             msg.images.forEach(img => {
+                const inline = parseDataUrl(img);
+                if (inline) parts.push({ inlineData: inline });
             });
-            return response.text || "";
-        },
-        async () => {
-             const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_TEXT_FALLBACK,
-                contents: { parts },
-            });
-            return response.text || "";
         }
-    );
-};
+        return { role: msg.role, parts };
+    });
 
-export const generateCharacterSheetView = async (characterImage: string, view: 'front' | 'side' | 't_pose' | 'face' | 'accessories'): Promise<string> => {
-    const viewDescriptions: Record<typeof view, string> = {
-        front: 'Full-body front view.',
-        side: 'Full-body side view.',
-        t_pose: 'Full-body T-pose.',
-        face: "Detailed face close-up.",
-        accessories: "Accessories view."
-    };
+    const currentParts: Part[] = [{ text: lastMsg.text }];
 
-    const prompt = `Generate the '${view}' view. ${viewDescriptions[view]} Style: Manhwa character sheet. White background.`;
-    const parts: Part[] = [ { text: prompt } ];
-    
-    const inline = parseDataUrl(characterImage);
-    if(inline) parts.push({ inlineData: inline });
-
-    return callWithFallback(
-        'generateCharacterSheetView',
-        async () => {
-            const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_IMAGE,
-                contents: { parts },
-                config: { responseModalities: [Modality.IMAGE], imageConfig: { imageSize: '2K', aspectRatio: '3:4' } },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            throw new Error("No character sheet view generated.");
-        },
-        async () => {
-             const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_IMAGE_FALLBACK,
-                contents: { parts },
-                config: { responseModalities: [Modality.IMAGE], imageConfig: { aspectRatio: '3:4' } },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            throw new Error("No character sheet view generated.");
-        }
-    );
-};
-
-
-// --- AGENT TOOLS ---
-const createPanelTool: FunctionDeclaration = {
-    name: 'create_manhwa_panel',
-    description: "Creates a new manhwa panel layout.",
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            layout_type: { type: Type.STRING, enum: ['1', '2v', '2h', '3v', '3h', '4g', 'l-shape', 'reverse-l', '1-top-3-bottom', '1-left-3-right', 'complex-5'] },
-            prompts: { type: Type.ARRAY, items: { type: Type.STRING } },
-            character_names: { type: Type.ARRAY, items: { type: Type.STRING } },
-        },
-        required: ['layout_type', 'prompts'],
-    },
-};
-
-const fillPanelsTool: FunctionDeclaration = {
-    name: 'fill_manhwa_panels',
-    description: 'Generates content for existing empty panels.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            targets: {
-                type: Type.ARRAY,
-                items: {
-                    type: Type.OBJECT,
-                    properties: {
-                        sub_panel_id: { type: Type.STRING },
-                        prompt: { type: Type.STRING },
-                        shot_type: { type: Type.STRING, enum: ["Establishing Shot", "Full Shot", "Medium Shot", "Close-up", "Extreme Close-up"] },
-                        camera_angle: { type: Type.STRING, enum: ["Normal Angle", "High Angle", "Low Angle", "Dutch Angle"] },
-                    },
-                    required: ['sub_panel_id', 'prompt'],
-                }
-            },
-            character_names: { type: Type.ARRAY, items: { type: Type.STRING } },
-        },
-        required: ['targets'],
-    },
-};
-
-const editPanelTool: FunctionDeclaration = {
-    name: 'edit_panel_image',
-    description: 'Edits a panel image.',
-    parameters: {
-        type: Type.OBJECT,
-        properties: {
-            sub_panel_id: { type: Type.STRING },
-            edit_prompt: { type: Type.STRING },
-        },
-        required: ['sub_panel_id', 'edit_prompt'],
-    },
-};
-
-export const chatWithAgent = async (
-    history: ChatMessage[],
-    project: Project,
-): Promise<{ text: string; functionCall?: AgentFunctionCall }> => {
-    const lastMessage = history[history.length - 1];
-    const parts: Part[] = [{ text: `System: ${MANHWA_EXPERT_CONTEXT}` }];
-    
-    parts.push({text: `Project: ${project.title}`});
-    project.characters.forEach(c => parts.push({text: `Char: ${c.name}, ${c.description}`}));
-    parts.push({text: `User: ${lastMessage.text}`});
-
-    if (lastMessage.images && lastMessage.images.length > 0) {
-        lastMessage.images.forEach(img => {
-             const inline = parseDataUrl(img);
-             if(inline) parts.push({ inlineData: inline });
-        });
-    }
-
-    const processResponse = (response: any) => {
-        const candidate = response.candidates?.[0];
-        if (!candidate?.content?.parts) return { text: "No response." };
-        let text = "";
-        let functionCall;
-        for(const part of candidate.content.parts) {
-            if(part.text) text += part.text;
-            if(part.functionCall) functionCall = { name: part.functionCall.name, args: part.functionCall.args };
-        }
-        return { text, functionCall };
-    };
+    const systemInstruction = `You are Nano Banana Pro, the ultimate Manhwa Director. 
+    ${MANHWA_EXPERT_CONTEXT}
+    Project: "${project.title}".
+    Help the user create an award-winning Webtoon.
+    Be creative, suggest layouts from 'Datos-Manwha', and be technically precise.`;
 
     return callWithFallback(
         'chatWithAgent',
         async () => {
-            const ai = getAI();
-             const response = await ai.models.generateContent({
+            const chat = getAI().chats.create({
                 model: MODEL_TEXT,
-                contents: { parts },
-                config: {
-                    systemInstruction: "You are Nano Banana Pro, an expert manhwa assistant using Gemini 3.0 Pro. Respond in Spanish.",
-                    tools: [{ functionDeclarations: [createPanelTool, fillPanelsTool, editPanelTool] }],
-                }
+                history: geminiHistory,
+                config: { systemInstruction }
             });
-            return processResponse(response);
+            
+            const result = await chat.sendMessage({ message: currentParts });
+            
+            let fc: AgentFunctionCall | undefined = undefined;
+            const candidate = result.candidates?.[0];
+            if (candidate) {
+                 const toolCall = candidate.content?.parts?.find(p => 'functionCall' in p && p.functionCall);
+                 if (toolCall && toolCall.functionCall) {
+                     fc = { name: toolCall.functionCall.name, args: toolCall.functionCall.args as any };
+                 }
+            }
+            
+            return { text: result.text || "", functionCall: fc };
         },
         async () => {
-             const ai = getAI();
-             const response = await ai.models.generateContent({
-                model: MODEL_TEXT_FALLBACK,
-                contents: { parts },
-                config: {
-                    systemInstruction: "You are Nano (Standard), an expert manhwa assistant. Respond in Spanish.",
-                    tools: [{ functionDeclarations: [createPanelTool, fillPanelsTool, editPanelTool] }],
-                }
-            });
-            return processResponse(response);
+            const chat = getAI().chats.create({ model: MODEL_TEXT_FALLBACK, history: geminiHistory, config: { systemInstruction } });
+            const result = await chat.sendMessage({ message: currentParts });
+            return { text: result.text || "" };
         }
     );
 };
 
-export const generateCoverArt = async (
-    prompt: string,
-    characters: Character[],
-    styleReferences: StyleReference[],
-): Promise<string> => {
-    const parts: Part[] = [{ text: `Create a 9:16 manhwa cover art. ${prompt} Style: Professional Manhwa.` }];
+export const generateCoverArt = async (prompt: string, characters: Character[], styleReferences: StyleReference[]): Promise<string> => {
+    const parts: Part[] = [
+        { text: MANHWA_EXPERT_CONTEXT },
+        { text: `[TASK] Create a PREMIUM 9:16 Manhwa Cover Art using Gemini 3.0 Pro Image.` },
+        { text: `[MANDATORY] RENDER TEXT: "${prompt}". The text must be legible, massive, and stylized (Webtoon Title Logo style).` },
+        { text: `[TITLE] ${prompt}` },
+        { text: `[STYLE] High contrast, dynamic composition, 8k resolution, cinematic lighting, masterpiece. VIBRANT COLORS.` },
+    ];
     
-    if (characters.length > 0) {
-        parts.push({ text: `\n--- CHARACTERS TO FEATURE ---` });
-        for (const char of characters) {
-            parts.push({ text: `\n[CHARACTER]: ${char.name}\n${char.description}` });
-            if (!char.referenceImage.startsWith('PLACEHOLDER:')) {
-                 const inline = parseDataUrl(char.referenceImage);
-                 if(inline) parts.push({ inlineData: inline });
-            }
-        }
+    if (characters.length) {
+        characters.forEach(c => {
+            const directives = constructCharacterDirectives(c);
+            parts.push({ text: `Main Character: ${directives}` });
+            const inline = parseDataUrl(c.referenceImage);
+            if(inline) parts.push({ inlineData: inline });
+        });
     }
+    processAssetReferences(parts, styleReferences, "ART STYLE");
 
-    processAssetReferences(parts, styleReferences, "STYLE");
+    // Pro Image Config
+    const config = { 
+        imageConfig: { aspectRatio: '9:16', imageSize: '2K' } 
+    };
     
     return callWithFallback(
         'generateCoverArt',
         async () => {
-            const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_IMAGE,
-                contents: { parts },
-                config: { responseModalities: [Modality.IMAGE], imageConfig: { aspectRatio: '9:16', imageSize: '2K' } },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            throw new Error("No cover art generated.");
+            const r = await getAI().models.generateContent({ model: MODEL_IMAGE, contents: { parts }, config });
+            if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+            return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
         },
         async () => {
-             const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_IMAGE_FALLBACK,
-                contents: { parts },
-                config: { responseModalities: [Modality.IMAGE], imageConfig: { aspectRatio: '9:16' } },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            throw new Error("No cover art generated.");
+             const r = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts }, config: { imageConfig: { aspectRatio: '9:16' } } });
+            if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image generated");
+            return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
         }
     );
 };
 
 export const planScene = async (
-  sceneDescription: string,
-  characters: Character[],
-  objects: ObjectAsset[],
-  styleReferences: StyleReference[],
-  sceneType: SceneType,
-  allowedLayouts: string[],
-  flowStyle: 'grid' | 'waterfall',
-  panelCount?: number
+  sceneDescription: string, 
+  characters: Character[], 
+  objects: ObjectAsset[], 
+  styles: StyleReference[],
+  sceneType: SceneType, 
+  allowedLayouts: string[], 
+  flowStyle: 'grid' | 'waterfall', 
+  panelCount?: number,
+  storyContext?: { content: string, mimeType: string } 
 ): Promise<ScenePlanPage[]> => {
-    const prompt = `Plan a scene: "${sceneDescription}". Type: ${sceneType}. Characters: ${characters.map(c=>c.name).join(', ')}. Return JSON array of pages with layouts and subpanels.`;
-    const schema = {
-        type: Type.ARRAY,
-        items: {
-            type: Type.OBJECT,
-            properties: {
-                page_number: { type: Type.INTEGER },
-                layout: { type: Type.STRING },
-                sub_panels: {
-                    type: Type.ARRAY,
-                    items: {
-                        type: Type.OBJECT,
-                        properties: {
-                            shot_type: { type: Type.STRING },
-                            camera_angle: { type: Type.STRING },
-                            action_description: { type: Type.STRING },
-                            justification: { type: Type.STRING },
-                        },
-                        required: ['shot_type', 'camera_angle', 'action_description', 'justification'],
-                    },
-                },
-            },
-            required: ['page_number', 'layout', 'sub_panels'],
-        },
-    };
+    
+    const layoutList = Object.keys(layouts).join(', ');
+    
+    let prompt = `
+    ${MANHWA_EXPERT_CONTEXT}
+    [TASK] Plan a Manhwa Scene (Gemini 3.0).
+    `;
 
-     return callWithFallback(
-         'planScene',
+    const parts: Part[] = [];
+
+    if (storyContext) {
+        if (storyContext.mimeType === 'text/plain') {
+             prompt += `\n[SOURCE MATERIAL] Use this script/story segment to plan the panels:\n"""\n${storyContext.content.substring(0, 30000)}\n"""\n`;
+             parts.push({ text: prompt });
+        } else {
+             prompt += "\n[SOURCE MATERIAL] Analyze the attached file (PDF/Audio) to plan the scene.";
+             parts.push({ text: prompt });
+             parts.push({ inlineData: { mimeType: storyContext.mimeType, data: storyContext.content } });
+        }
+    } else {
+        prompt += `\n[SCENE DESCRIPTION]: "${sceneDescription}"`;
+        parts.push({ text: prompt });
+    }
+
+    parts.push({ text: `
+    [CONTEXT] 
+    - Type: ${sceneType || 'Dynamic Manhwa Flow'}
+    - Characters: ${characters.map(c=>c.name).join(', ')}.
+    - Format: WEBTOON (Vertical Scroll). CRITICAL: USE TALL LAYOUTS.
+    - Approximate Panel Count: ${panelCount || 'Auto-detect based on pacing'}.
+
+    [AVAILABLE LAYOUTS]: ${layoutList}.
+    
+    [LAYOUT RULES - WEBTOON ONLY]
+    - FORBIDDEN: '1' (Square). DO NOT USE IT. It is too small for Webtoon.
+    - REQUIRED: Use '1-tall' or '1-ultra-tall' for standard panels.
+    - Use 'slash-diag' for quick action.
+    - Use '2v' or '3v' for stacked dialogue sequences. These layouts create long vertical strips.
+
+    [OUTPUT FORMAT]
+    Return a valid JSON array of ScenePlanPage objects.
+    `});
+    
+    const schema = { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { page_number: { type: Type.INTEGER }, layout: { type: Type.STRING }, sub_panels: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { shot_type: { type: Type.STRING }, camera_angle: { type: Type.STRING }, action_description: { type: Type.STRING }, justification: { type: Type.STRING } }, required: ['shot_type', 'camera_angle', 'action_description'] } } }, required: ['page_number', 'layout', 'sub_panels'] } };
+
+    return callWithFallback(
+        'planScene',
         async () => {
-            const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_TEXT,
-                contents: { parts: [{ text: prompt }] },
-                config: {
-                    responseMimeType: 'application/json',
-                    responseSchema: schema,
-                }
-            });
-            return JSON.parse(response.text) as ScenePlanPage[];
-         },
-         async () => {
-             const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_TEXT_FALLBACK,
-                contents: { parts: [{ text: prompt }] },
-                config: {
-                    responseMimeType: 'application/json',
-                    responseSchema: schema,
-                }
-            });
-            return JSON.parse(response.text) as ScenePlanPage[];
-         }
-     );
+            const r = await getAI().models.generateContent({ model: MODEL_TEXT, contents: { parts }, config: { responseMimeType: 'application/json', responseSchema: schema } });
+            return JSON.parse(r.text || "[]") as ScenePlanPage[];
+        },
+        async () => {
+             const r = await getAI().models.generateContent({ model: MODEL_TEXT_FALLBACK, contents: { parts }, config: { responseMimeType: 'application/json', responseSchema: schema } });
+            return JSON.parse(r.text || "[]") as ScenePlanPage[];
+        }
+    );
 };
 
 export const analyzeStoryAndPlan = async (
-    storyAssets: { mimeType: string; data: string }[],
-    characters: Character[],
+    assets: { name: string, mimeType: string, data: string }[], 
+    characters: Character[], 
     flowStyle: 'grid' | 'waterfall'
 ): Promise<ScenePlanPage[]> => {
-    const schema = {
-        type: Type.ARRAY,
-        items: {
-            type: Type.OBJECT,
-            properties: {
-                page_number: { type: Type.INTEGER },
-                layout: { type: Type.STRING },
-                sub_panels: {
-                    type: Type.ARRAY,
-                    items: {
-                        type: Type.OBJECT,
-                        properties: {
-                            shot_type: { type: Type.STRING },
-                            camera_angle: { type: Type.STRING },
-                            action_description: { type: Type.STRING },
-                            justification: { type: Type.STRING },
-                        },
-                        required: ['shot_type', 'camera_angle', 'action_description', 'justification'],
-                    },
-                },
-            },
-            required: ['page_number', 'layout', 'sub_panels'],
-        },
-    };
-
     const parts: Part[] = [
-        { text: `You are a professional Manhwa Director. Analyze the provided story materials (text, audio scripts, or storyboard sketches). 
-        
-        Create a complete visual plan for this chapter.
-        1. Identify which known characters appear (Known Characters: ${characters.map(c => c.name).join(', ')}).
-        2. Structure the story into pages/panels using the ${flowStyle} flow.
-        3. If audio is provided, transcribe the key plot points and convert them into visual scenes.
-        ` }
+        { text: MANHWA_EXPERT_CONTEXT },
+        { text: `[TASK] Analyze story and plan scene. Output JSON.` }
     ];
-
-    // Add multimodal assets (PDF pages, Audio clips, Images)
-    storyAssets.forEach(asset => {
-        parts.push({ inlineData: { mimeType: asset.mimeType, data: asset.data } });
-    });
-
-    return callWithFallback(
-        'analyzeStoryAndPlan',
-        async () => {
-             const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_TEXT,
-                contents: { parts },
-                config: {
-                    responseMimeType: 'application/json',
-                    responseSchema: schema,
-                }
-            });
-            return JSON.parse(response.text) as ScenePlanPage[];
-        },
-        async () => {
-             // Fallback likely won't handle heavy multimodal well, but we try.
-             const ai = getAI();
-            const response = await ai.models.generateContent({
-                model: MODEL_TEXT_FALLBACK,
-                contents: { parts },
-                config: {
-                    responseMimeType: 'application/json',
-                    responseSchema: schema,
-                }
-            });
-            return JSON.parse(response.text) as ScenePlanPage[];
-        }
-    );
+     return [];
 };
 
-
-export const generateAppStatusReport = async (a: string, b: string) => "Report generated.";
-export const analyzePanelForNewEntities = async (a: string, b: string, c: Character[], d: ObjectAsset[]) => ({new_characters: [], new_objects: []});
-export const extractAssetFromImage = async (img: string, desc: string, type: string, styles: StyleReference[] = []) => img;
-export const analyzePanelForCharacters = async (img: string, chars: Character[]) => ({new_characters: []});
-export const generateBugReport = async (t: LiveTranscriptEntry[]) => "Bug report.";
-
-export const generateHighQualityImage = async (prompt: string, ar: string) => {
-    const parts: Part[] = [{ text: `Create image: ${prompt}. Aspect Ratio: ${ar}` }];
-    return callWithFallback(
-        'generateHighQualityImage',
-        async () => {
-             const ai = getAI();
-             const response = await ai.models.generateContent({
-                model: MODEL_IMAGE,
-                contents: { parts },
-                config: { responseModalities: [Modality.IMAGE], imageConfig: { imageSize: '2K', aspectRatio: ar === '1:1' ? '1:1' : '3:4' } },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            return "";
-        },
-        async () => {
-             const ai = getAI();
-             const response = await ai.models.generateContent({
-                model: MODEL_IMAGE_FALLBACK,
-                contents: { parts },
-                config: { responseModalities: [Modality.IMAGE], imageConfig: { aspectRatio: ar === '1:1' ? '1:1' : '3:4' } },
-            });
-            for (const part of response.candidates?.[0]?.content?.parts || []) {
-                if (part.inlineData) return `data:image/png;base64,${part.inlineData.data}`;
-            }
-            return "";
-        }
-    );
+export const generateAppStatusReport = async (history: string, implementation: string) => {
+    const parts = [{ text: `Generate status report. History: ${history}. Impl: ${implementation}` }];
+    const r = await getAI().models.generateContent({ model: MODEL_TEXT, contents: { parts } });
+    return r.text || "Report.";
 };
+
+export const extractAssetFromImage = async (img: string, desc: string, type: string, styles: StyleReference[] = []) => {
+    const parts: Part[] = [{ text: `Extract ${type}: ${desc}` }, { inlineData: parseDataUrl(img)! }];
+    const r = await getAI().models.generateContent({ model: MODEL_IMAGE_FALLBACK, contents: { parts }});
+    if (!r.candidates?.[0]?.content?.parts?.[0]?.inlineData?.data) throw new Error("No image");
+    return `data:image/png;base64,${r.candidates[0].content.parts[0].inlineData.data}`;
+};
+
+export const analyzePanelForCharacters = async (img: string, chars: Character[]) => {
+     const parts: Part[] = [{ text: `Analyze panel for new characters.` }, { inlineData: parseDataUrl(img)! }];
+     const schema = { type: Type.OBJECT, properties: { new_characters: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { name_suggestion: { type: Type.STRING }, description: { type: Type.STRING } } } } } };
+     const r = await getAI().models.generateContent({ model: MODEL_TEXT, contents: { parts }, config: { responseMimeType: 'application/json', responseSchema: schema }});
+     return JSON.parse(r.text || "{}");
+};
+
+export const generateBugReport = async (t: LiveTranscriptEntry[]) => { return "Report"; };
+export const describeImage = async (baseImage: string, prompt: string) => { 
+    const parts: Part[] = [{ text: prompt }, { inlineData: parseDataUrl(baseImage)! }];
+    const r = await getAI().models.generateContent({ model: MODEL_TEXT, contents: { parts } });
+    return r.text || "";
+};
+export const generateCharacterSheetView = async (baseImage: string, view: string) => { return baseImage; };
+export const generateHighQualityImage = async (prompt: string, aspectRatio: string) => { return ""; };

@@ -15,6 +15,8 @@ export interface SubPanel {
   generationMode?: 'page' | 'sequential';
 }
 
+export type BubbleType = 'speech' | 'shout' | 'thought' | 'box' | 'whisper';
+
 export interface DialogueBubble {
     id: string;
     text: string;
@@ -24,6 +26,8 @@ export interface DialogueBubble {
     height: number;
     zIndex: number;
     styleId?: string; // Link to a DialogueStyle asset
+    bubbleType: BubbleType; // New field for visual style
+    fontSize?: number;
 }
 
 
@@ -44,6 +48,7 @@ export interface Chapter {
 export interface Character {
   id:string;
   name: string;
+  gender?: 'male' | 'female'; // Nuevo campo obligatorio
   description: string; // The primary, most detailed description for the AI.
   
   // Detailed fields from the document for UI organization

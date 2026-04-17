@@ -2,7 +2,7 @@
 interface Toast {
   id: number;
   message: string;
-  type: 'success' | 'error' | 'info';
+  type: 'success' | 'error' | 'info' | 'warning';
 }
 
 export const showToast = (message: string, type: Toast['type'] = 'info') => {

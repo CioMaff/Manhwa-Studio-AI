@@ -1,3 +1,4 @@
+
 import React, { useState, useMemo } from 'react';
 import type { Character, ObjectAsset, BackgroundAsset } from '../types';
 import { fileToBase64, textFileToString, compressImageBase64 } from '../utils/fileUtils';
@@ -58,24 +59,33 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ onOpenCharacterModal
 
 
     const handleAddAsset = async (e: React.ChangeEvent<HTMLInputElement>, type: 'style' | 'dialogue' | 'object' | 'background') => {
-        if (e.target.files && e.target.files[0]) {
-            const file = e.target.files[0];
-            const base64 = await fileToBase64(file);
-            const compressed = await compressImageBase64(base64);
+        if (e.target.files && e.target.files.length > 0) {
+            const files = Array.from(e.target.files) as File[];
+            const newAssets: any[] = [];
             
-            if (type === 'object') {
-                 const newAsset: ObjectAsset = { id: Date.now().toString(), name: file.name, image: compressed, ownerInfo: { type: 'various', name: 'Various' } };
-                 updateProject(p => ({ ...p, objects: [...p.objects, newAsset]}));
-            } else {
-                const newAsset = { id: Date.now().toString(), name: file.name, image: compressed };
-                updateProject(p => {
-                    if (type === 'style') return { ...p, styleReferences: [...p.styleReferences, newAsset]};
-                    if (type === 'dialogue') return { ...p, dialogueStyles: [...p.dialogueStyles, newAsset]};
-                    if (type === 'background') return { ...p, backgrounds: [...p.backgrounds, newAsset] };
-                    return p;
-                });
+            showToast(`Uploading ${files.length} items...`, 'info');
+
+            for (const file of files) {
+                const base64 = await fileToBase64(file);
+                const compressed = await compressImageBase64(base64);
+                const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+                
+                if (type === 'object') {
+                     newAssets.push({ id, name: file.name, image: compressed, ownerInfo: { type: 'various', name: 'Various' } });
+                } else {
+                    newAssets.push({ id, name: file.name, image: compressed });
+                }
             }
+
+            updateProject(p => {
+                if (type === 'style') return { ...p, styleReferences: [...p.styleReferences, ...newAssets]};
+                if (type === 'dialogue') return { ...p, dialogueStyles: [...p.dialogueStyles, ...newAssets]};
+                if (type === 'background') return { ...p, backgrounds: [...p.backgrounds, ...newAssets] };
+                if (type === 'object') return { ...p, objects: [...p.objects, ...newAssets]};
+                return p;
+            });
             e.target.value = ''; // Reset input
+            showToast(`Successfully added ${files.length} items.`, 'success');
         }
     };
     
@@ -146,7 +156,7 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ onOpenCharacterModal
             </Section>
 
             <Section title="Style References" onAdd={() => document.getElementById('style-ref-upload')?.click()}>
-                <input type="file" id="style-ref-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'style')} />
+                <input type="file" id="style-ref-upload" className="hidden" accept="image/*" multiple onChange={(e) => handleAddAsset(e, 'style')} />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {styleReferences.map(ref => (
                         <div key={ref.id} className="relative group cursor-pointer aspect-square rounded-lg overflow-hidden border border-white/5 hover:border-green-500/50 transition-all" onClick={() => setViewingImage(ref.image)}>
@@ -161,7 +171,7 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ onOpenCharacterModal
             </Section>
             
             <Section title="Objects" onAdd={() => document.getElementById('object-upload')?.click()}>
-                <input type="file" id="object-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'object')} />
+                <input type="file" id="object-upload" className="hidden" accept="image/*" multiple onChange={(e) => handleAddAsset(e, 'object')} />
                  <div className="space-y-2">
                     {Object.entries(groupedObjects).map(([ownerName, ownerObjects]) => (
                         <div key={ownerName} className="bg-white/5 rounded-lg p-2">
@@ -185,7 +195,7 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ onOpenCharacterModal
             </Section>
 
             <Section title="Backgrounds" onAdd={() => document.getElementById('background-upload')?.click()}>
-                <input type="file" id="background-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'background')} />
+                <input type="file" id="background-upload" className="hidden" accept="image/*" multiple onChange={(e) => handleAddAsset(e, 'background')} />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {backgrounds.map(ref => (
                         <div key={ref.id} className="relative group cursor-pointer aspect-video rounded-lg overflow-hidden border border-white/5 hover:border-blue-500/50 transition-all" onClick={() => setViewingImage(ref.image)}>
@@ -200,7 +210,7 @@ export const AssetManager: React.FC<AssetManagerProps> = ({ onOpenCharacterModal
             </Section>
 
              <Section title="Dialogue Styles" onAdd={() => document.getElementById('dialogue-style-upload')?.click()}>
-                <input type="file" id="dialogue-style-upload" className="hidden" accept="image/*" onChange={(e) => handleAddAsset(e, 'dialogue')} />
+                <input type="file" id="dialogue-style-upload" className="hidden" accept="image/*" multiple onChange={(e) => handleAddAsset(e, 'dialogue')} />
                 <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                     {dialogueStyles.map(ref => (
                         <div key={ref.id} className="relative group cursor-pointer aspect-video bg-gray-800 rounded-lg overflow-hidden border border-white/5 hover:border-yellow-500/50 transition-all" onClick={() => setViewingImage(ref.image)}>

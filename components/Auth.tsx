@@ -1,52 +1,139 @@
-import React from 'react';
-import { GoogleIcon } from './icons/GoogleIcon';
+
+import React, { useState } from 'react';
+import { supabase } from '../utils/supabaseClient';
+import { showToast } from '../systems/uiSystem';
 
 interface AuthProps {
-    onLogin: (username: string) => void;
+    onLogin: (userId: string, email: string) => void;
 }
 
 export const Auth: React.FC<AuthProps> = ({ onLogin }) => {
+    const [email, setEmail] = useState('');
+    const [password, setPassword] = useState('');
+    const [isLoading, setIsLoading] = useState(false);
+    const [isSignUp, setIsSignUp] = useState(false);
 
-    const handleGuestLogin = () => {
-        onLogin('guest-user');
-    };
+    const handleSubmit = async (e: React.FormEvent) => {
+        e.preventDefault();
+        if (!email.trim() || !password.trim()) return;
 
-    const handleGoogleLoginClick = () => {
-        // This is a simulated login. It creates a unique "Google" user ID to store projects separately.
-        const uniqueGoogleId = `google-user-${Date.now().toString().slice(-6)}`;
-        onLogin(uniqueGoogleId);
+        setIsLoading(true);
+        try {
+            if (isSignUp) {
+                const { data, error } = await supabase.auth.signUp({
+                    email: email.trim(),
+                    password: password.trim(),
+                });
+                if (error) throw error;
+                if (data.user) {
+                    showToast("Cuenta creada exitosamente. Por favor inicia sesión.", "success");
+                    setIsSignUp(false);
+                }
+            } else {
+                const { data, error } = await supabase.auth.signInWithPassword({
+                    email: email.trim(),
+                    password: password.trim(),
+                });
+                if (error) throw error;
+                if (data.user) {
+                    onLogin(data.user.id, data.user.email || email);
+                }
+            }
+        } catch (error: any) {
+            console.error("Auth error:", error);
+            showToast(error.message || "Error de autenticación", "error");
+        } finally {
+            setIsLoading(false);
+        }
     };
 
     return (
-        <div className="flex items-center justify-center h-full p-4">
-            <div className="bg-gray-800/50 border border-gray-700 p-8 rounded-lg shadow-2xl max-w-sm w-full text-center">
-                <h2 className="text-3xl font-bold mb-4 text-transparent bg-clip-text bg-gradient-to-r from-purple-400 to-cyan-400">
-                    Gemini Manhwa Studio
-                </h2>
-                <p className="text-gray-400 mb-8">
-                    Your progress will be saved automatically in your browser.
-                </p>
-                <button
-                    onClick={handleGoogleLoginClick}
-                    className="w-full inline-flex justify-center items-center bg-white text-gray-800 font-semibold py-3 px-4 rounded-md shadow-md hover:bg-gray-200 transition-colors"
-                >
-                    <GoogleIcon className="w-5 h-5 mr-3" />
-                    Sign in with Google
-                </button>
-                 <div className="relative my-4">
-                  <div className="absolute inset-0 flex items-center" aria-hidden="true">
-                    <div className="w-full border-t border-gray-600" />
-                  </div>
-                  <div className="relative flex justify-center">
-                    <span className="bg-gray-800 px-2 text-sm text-gray-400">or</span>
-                  </div>
+        <div className="flex min-h-screen bg-[#09090b] text-white font-sans items-center justify-center relative overflow-hidden">
+            {/* Ambient Background */}
+            <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_top,_var(--tw-gradient-stops))] from-violet-900/20 via-[#09090b] to-[#09090b] pointer-events-none"></div>
+
+            <div className="relative z-10 w-full max-w-md p-8">
+                <div className="text-center mb-10">
+                    <div className="inline-flex items-center justify-center w-16 h-16 rounded-2xl bg-gradient-to-br from-violet-600 to-indigo-600 shadow-2xl shadow-violet-500/20 mb-6">
+                        <span className="text-3xl font-bold text-white">M</span>
+                    </div>
+                    <h1 className="text-3xl font-bold tracking-tight text-white mb-2">Manhwa AI Studio</h1>
+                    <p className="text-gray-400 text-sm">{isSignUp ? 'Crea una cuenta para guardar tus proyectos en la nube.' : 'Inicia sesión para acceder a tu espacio de trabajo.'}</p>
                 </div>
-                <button
-                    onClick={handleGuestLogin}
-                    className="w-full bg-gray-600/50 text-gray-300 font-bold py-3 px-4 rounded-md hover:bg-gray-600/80 transition-opacity"
-                >
-                    Continue as Guest
-                </button>
+
+                <form onSubmit={handleSubmit} className="space-y-6 bg-white/5 p-8 rounded-3xl border border-white/10 backdrop-blur-xl shadow-2xl">
+                    <div>
+                        <label htmlFor="email" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 ml-1">
+                            Email
+                        </label>
+                        <input
+                            id="email"
+                            type="email"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            placeholder="name@example.com"
+                            className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-4 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-transparent transition-all text-sm"
+                            required
+                            autoComplete="email"
+                        />
+                    </div>
+                    <div>
+                        <label htmlFor="password" className="block text-xs font-bold text-gray-500 uppercase tracking-wider mb-2 ml-1">
+                            Contraseña
+                        </label>
+                        <input
+                            id="password"
+                            type="password"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            placeholder="••••••••"
+                            className="w-full bg-black/40 border border-white/10 rounded-xl px-4 py-4 text-white placeholder-gray-600 focus:outline-none focus:ring-2 focus:ring-violet-500/50 focus:border-transparent transition-all text-sm"
+                            required
+                            autoComplete={isSignUp ? "new-password" : "current-password"}
+                        />
+                    </div>
+
+                    <button
+                        type="submit"
+                        disabled={!email.trim() || !password.trim() || isLoading}
+                        className="w-full bg-white text-black hover:bg-gray-200 font-bold py-4 rounded-xl transition-all transform hover:scale-[1.02] active:scale-[0.98] disabled:opacity-50 disabled:cursor-not-allowed shadow-lg flex items-center justify-center gap-2"
+                    >
+                        {isLoading ? (
+                            <div className="w-5 h-5 border-2 border-black/30 border-t-black rounded-full animate-spin"></div>
+                        ) : (
+                            <span>{isSignUp ? 'Crear Cuenta' : 'Entrar al Estudio'}</span>
+                        )}
+                        {!isLoading && <span className="text-lg">→</span>}
+                    </button>
+                    
+                    <div className="text-center mt-4 flex flex-col gap-3">
+                        <button 
+                            type="button" 
+                            onClick={() => setIsSignUp(!isSignUp)}
+                            className="text-xs text-violet-400 hover:text-violet-300 transition-colors"
+                        >
+                            {isSignUp ? '¿Ya tienes cuenta? Inicia sesión' : '¿No tienes cuenta? Regístrate'}
+                        </button>
+                        
+                        <div className="relative flex items-center py-2">
+                            <div className="flex-grow border-t border-white/10"></div>
+                            <span className="flex-shrink-0 mx-4 text-gray-500 text-xs">O</span>
+                            <div className="flex-grow border-t border-white/10"></div>
+                        </div>
+
+                        <button 
+                            type="button" 
+                            onClick={() => onLogin('guest', 'guest')}
+                            className="text-sm font-semibold text-gray-400 hover:text-white transition-colors bg-white/5 hover:bg-white/10 py-3 rounded-xl border border-white/5"
+                        >
+                            Continuar sin cuenta (Modo Local)
+                        </button>
+                    </div>
+                    
+                    <p className="text-[10px] text-center text-gray-500 leading-relaxed px-4 mt-4">
+                        Tus proyectos se guardan de forma segura en la nube usando Supabase.
+                    </p>
+                </form>
             </div>
         </div>
     );

@@ -1,3 +1,4 @@
+
 import React from 'react';
 import { Modal } from './Modal';
 import { layouts as layoutData } from './layouts';
@@ -8,9 +9,16 @@ interface PanelLayoutPickerModalProps {
   onSelect: (layout: number[][]) => void;
 }
 
-const LayoutPreview: React.FC<{ layout: number[][], onClick: () => void }> = ({ layout, onClick }) => {
+const LayoutPreview: React.FC<{ layout: number[][] }> = ({ layout }) => {
+    // Safety check: If layout is undefined or empty, render error state
+    if (!layout || !Array.isArray(layout) || layout.length === 0) return (
+        <div className="p-2 border border-red-500/30 bg-red-900/20 text-red-400 text-[10px] rounded-md h-full flex items-center justify-center">
+            Invalid Layout
+        </div>
+    );
+
     const numRows = layout.length;
-    const numCols = layout[0].length;
+    const numCols = layout[0]?.length || 0;
     const uniquePanels = layout.flat().filter((v, i, a) => a.indexOf(v) === i);
 
     const getGridArea = (panelId: number): React.CSSProperties => {
@@ -29,38 +37,48 @@ const LayoutPreview: React.FC<{ layout: number[][], onClick: () => void }> = ({ 
     };
 
     return (
-        <div onClick={onClick} className="p-2 border-2 border-gray-700 rounded-md hover:border-purple-500 bg-gray-800 cursor-pointer transition-colors">
-            <div style={{ display: 'grid', gridTemplateRows: `repeat(${numRows}, 1fr)`, gridTemplateColumns: `repeat(${numCols}, 1fr)`, gap: '4px', height: '100px'}}>
+        <div className="p-2 border border-white/10 rounded-md group-hover:border-violet-500 bg-zinc-800 transition-all h-full flex flex-col pointer-events-none">
+            <div style={{ display: 'grid', gridTemplateRows: `repeat(${numRows}, 1fr)`, gridTemplateColumns: `repeat(${numCols}, 1fr)`, gap: '4px', flexGrow: 1, minHeight: '100px' }}>
                 {uniquePanels.map(panelId => (
-                    <div key={panelId} style={getGridArea(panelId)} className="bg-gray-600 rounded-sm"></div>
+                    <div key={panelId} style={getGridArea(panelId)} className="bg-zinc-600 group-hover:bg-zinc-500 transition-colors rounded-sm flex items-center justify-center text-[10px] text-zinc-400 font-mono">
+                        {panelId}
+                    </div>
                 ))}
             </div>
         </div>
     );
 };
 
+// Defined strictly based on keys available in layouts.ts
 const layouts = [
-    { name: '1 Panel', id: '1', grid: layoutData['1'] },
-    { name: '2 Vertical', id: '2v', grid: layoutData['2v'] },
-    { name: '2 Horizontal', id: '2h', grid: layoutData['2h'] },
-    { name: '3 Vertical', id: '3v', grid: layoutData['3v'] },
-    { name: '3 Horizontal', id: '3h', grid: layoutData['3h'] },
-    { name: '4 Grid', id: '4g', grid: layoutData['4g'] },
-    { name: 'L-Shape', id: 'l-shape', grid: layoutData['l-shape'] },
-    { name: 'Reverse L', id: 'reverse-l', grid: layoutData['reverse-l'] },
-    { name: '1 Top, 3 Bottom', id: '1-top-3-bottom', grid: layoutData['1-top-3-bottom']},
-    { name: '1 Left, 3 Right', id: '1-left-3-right', grid: layoutData['1-left-3-right']},
-    { name: 'Complex 5', id: 'complex-5', grid: layoutData['complex-5']},
+    { name: 'Vertical Standard', id: '1' }, // Renamed from Single Panel
+    // '1-tall' removed as requested
+    { name: 'Ultra Tall (Scroll)', id: '1-ultra-tall' },
+    { name: '2 Vertical', id: '2v' },
+    { name: '2V Action', id: '2v-action' },
+    { name: '2V Reaction', id: '2v-reaction' },
+    { name: '2 Horizontal', id: '2h' },
+    { name: 'Diagonal Slash', id: 'slash-diag' },
+    { name: 'Action Impact', id: 'action-impact' },
+    { name: 'Reaction Inset', id: 'reaction-inset' },
+    { name: 'Establish Split', id: 'establish-split' },
+    { name: 'Complex 5', id: 'complex-5' },
+    { name: 'Chaos Grid', id: 'chaos-grid' },
+    { name: '3 Vertical', id: '3v' },
 ];
 
 export const PanelLayoutPickerModal: React.FC<PanelLayoutPickerModalProps> = ({ isOpen, onClose, onSelect }) => {
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title="Choose a Panel Layout" maxWidth="max-w-4xl">
-      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 max-h-[60vh] overflow-y-auto p-1">
+    <Modal isOpen={isOpen} onClose={onClose} title="Choose a Panel Layout (Webtoon Standard)" maxWidth="max-w-5xl">
+      <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4 max-h-[60vh] overflow-y-auto p-1 custom-scrollbar">
         {layouts.map((layout) => (
-          <div key={layout.name} onClick={() => onSelect(layout.grid)}>
-            <LayoutPreview layout={layout.grid} onClick={() => onSelect(layout.grid)} />
-            <p className="text-center text-xs mt-1 text-gray-400">{layout.name}</p>
+          <div key={layout.id} onClick={() => layoutData[layout.id] && onSelect(layoutData[layout.id])} className="flex flex-col h-full cursor-pointer group">
+            {layoutData[layout.id] ? (
+                <LayoutPreview layout={layoutData[layout.id]} />
+            ) : (
+                <div className="h-24 bg-red-900/20 border border-red-500/30 rounded flex items-center justify-center text-xs text-red-400">Missing Layout Data</div>
+            )}
+            <p className="text-center text-[10px] mt-2 text-gray-400 font-medium uppercase tracking-wider group-hover:text-white transition-colors">{layout.name}</p>
           </div>
         ))}
       </div>

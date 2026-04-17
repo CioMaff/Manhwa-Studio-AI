@@ -1,8 +1,11 @@
+
 import React, { useEffect, useState } from 'react';
 import type { Project } from '../types';
-import { getUserProjects, createNewProject, saveProjectToStorage } from '../utils/storage';
+import { getUserProjects, createNewProject, saveProjectToStorage, deleteProject } from '../utils/storage';
 import { PlusIcon } from './icons/PlusIcon';
+import { TrashIcon } from './icons/TrashIcon';
 import { Loader } from './Loader';
+import { showConfirmation, showToast } from '../systems/uiSystem';
 
 interface DashboardProps {
     username: string;
@@ -26,6 +29,25 @@ export const Dashboard: React.FC<DashboardProps> = ({ username, onSelectProject 
         const newProject = createNewProject(username);
         await saveProjectToStorage(username, newProject);
         setProjects([newProject, ...projects]);
+    };
+
+    const handleDelete = async (e: React.MouseEvent, projectId: string) => {
+        e.stopPropagation(); // Prevent opening the project
+        const confirmed = await showConfirmation({
+            title: "Delete Project",
+            message: "Are you sure? This will permanently delete the project and all its chapters.",
+            confirmButtonClass: "bg-red-600 hover:bg-red-700"
+        });
+
+        if (confirmed) {
+            try {
+                await deleteProject(projectId, username);
+                setProjects(prev => prev.filter(p => p.id !== projectId));
+                showToast("Project deleted.", 'info');
+            } catch (err) {
+                // Error handled in storage utils
+            }
+        }
     };
 
     if (loading) return <Loader message="Loading Library..." />;
@@ -76,11 +98,22 @@ export const Dashboard: React.FC<DashboardProps> = ({ username, onSelectProject 
                             {/* Gradient Overlay */}
                             <div className="absolute inset-0 bg-gradient-to-t from-black via-black/40 to-transparent opacity-80" />
                             
+                            {/* Delete Button (Visible on Group Hover) */}
+                            <button 
+                                onClick={(e) => handleDelete(e, project.id)}
+                                className="absolute top-3 right-3 p-2 bg-black/60 text-white/70 hover:text-red-400 hover:bg-black/80 rounded-full opacity-0 group-hover:opacity-100 transition-all z-20 backdrop-blur-sm"
+                                title="Delete Project"
+                            >
+                                <TrashIcon className="w-4 h-4" />
+                            </button>
+
                             {/* Content */}
                             <div className="absolute bottom-0 left-0 right-0 p-5 translate-y-2 group-hover:translate-y-0 transition-transform duration-300">
                                 <h3 className="font-bold text-lg text-white mb-1 line-clamp-2 leading-snug group-hover:text-violet-200 transition-colors">{project.title}</h3>
                                 <div className="flex items-center justify-between mt-2 opacity-0 group-hover:opacity-100 transition-opacity duration-300 delay-75">
-                                    <p className="text-[10px] font-medium uppercase tracking-wider text-white/60">{project.chapters.length} Chapters</p>
+                                    <p className="text-[10px] font-medium uppercase tracking-wider text-white/60">
+                                        {project.chapters?.length || 0} Chapters
+                                    </p>
                                     <span className="w-1.5 h-1.5 rounded-full bg-green-500 shadow-[0_0_5px_rgba(34,197,94,0.5)]"></span>
                                 </div>
                             </div>
