@@ -15,7 +15,41 @@ export interface SubPanel {
   generationMode?: 'page' | 'sequential';
 }
 
-export type BubbleType = 'speech' | 'shout' | 'thought' | 'box' | 'whisper';
+// Canonical webtoon bubble vocabulary. Each style is a deliberate choice that
+// carries tone: see DIALOGUE_BUBBLE_SYSTEM.md in the repo root for when-to-use.
+//   speech           — classic oval with tail, dialogue at normal volume
+//   shout            — spiky starburst, yelling / impact lines
+//   thought          — soft cloud, internal monologue / telepathy
+//   whisper          — dashed oval, quiet/secret speech
+//   box              — alias of narration-box, kept for backwards compat
+//   narration-box    — single black-bordered rectangle, narrator voice
+//   narration-double — two stacked rectangles, layered / conditional narration
+//   emphasis-neon    — rectangle with colored glow, dramatic beat (keyword / title)
+//   splash-sfx       — no bubble, typographic text with decorative background
+export type BubbleType =
+    | 'speech'
+    | 'shout'
+    | 'thought'
+    | 'whisper'
+    | 'box'
+    | 'narration-box'
+    | 'narration-double'
+    | 'emphasis-neon'
+    | 'splash-sfx';
+
+// Font families loaded via Google Fonts in index.html. Keeping the list tight
+// so the agent has a curated vocabulary instead of an infinite selector.
+//   sans-bold      — Bebas Neue / Anton. Default for narration and emphasis.
+//   sans-italic    — Oswald italic. Screams and exclamations.
+//   gothic         — UnifrakturMaguntia. Flashback / demonic / sacred-old.
+//   serif-display  — Cinzel Decorative. Epic titles, divine, systems.
+//   handwritten    — Caveat. Whispers, thoughts, casual asides.
+export type BubbleFont =
+    | 'sans-bold'
+    | 'sans-italic'
+    | 'gothic'
+    | 'serif-display'
+    | 'handwritten';
 
 export interface DialogueBubble {
     id: string;
@@ -26,7 +60,13 @@ export interface DialogueBubble {
     height: number;
     zIndex: number;
     styleId?: string; // Link to a DialogueStyle asset
-    bubbleType: BubbleType; // New field for visual style
+    bubbleType: BubbleType;
+    fontFamily?: BubbleFont;
+    // Accent color in hex (e.g. "#ff2d55"). Used as:
+    //   emphasis-neon → border + glow
+    //   splash-sfx    → splatter / decoration color
+    //   others        → ignored
+    accentColor?: string;
     fontSize?: number;
 }
 

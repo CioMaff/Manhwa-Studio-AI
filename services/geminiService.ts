@@ -7,6 +7,7 @@ import { MANHWA_EXPERT_CONTEXT } from "../utils/manhwaContext";
 import { layouts } from "../components/layouts";
 import { logger } from "../systems/logger";
 import { invokeEdgeFunction } from "../utils/supabaseClient";
+import { BUBBLE_STYLE_CATALOG } from "../utils/bubbleStyles";
 
 // -----------------------------------------------------------------------------
 // SECURITY: the Gemini API key MUST stay server-side. This module no longer
@@ -334,6 +335,62 @@ export const editPanelImage = async (baseImage: string, prompt: string): Promise
     });
 };
 
+// -----------------------------------------------------------------------------
+// Agent function declarations
+// -----------------------------------------------------------------------------
+// These are exposed to the Gemini model so it can take structured actions on
+// behalf of the user (e.g. "pon una burbuja de grito aquí"). The client-side
+// executor lives in Studio.tsx:executeAgentAction and matches on `name`.
+// See DIALOGUE_BUBBLE_SYSTEM.md for the full contract.
+// -----------------------------------------------------------------------------
+
+const bubbleStyleEnum = BUBBLE_STYLE_CATALOG.map(s => s.type);
+const bubbleStyleDescription = BUBBLE_STYLE_CATALOG
+    .map(s => `- ${s.type}: ${s.description}`)
+    .join('\n');
+
+const createDialogueBubbleTool = {
+    name: 'createDialogueBubble',
+    description:
+        `Coloca una burbuja de diálogo (bocadillo) sobre la viñeta actualmente ` +
+        `seleccionada, o sobre una viñeta específica si se pasa su id. El agente ` +
+        `elige estilo, fuente y posición siguiendo las convenciones de manhwa ` +
+        `vertical. Estilos disponibles:\n${bubbleStyleDescription}`,
+    parameters: {
+        type: Type.OBJECT,
+        properties: {
+            text: {
+                type: Type.STRING,
+                description: 'Texto del bocadillo. Usa MAYÚSCULAS para gritos y énfasis. Mantén <= 120 caracteres.',
+            },
+            bubbleType: {
+                type: Type.STRING,
+                enum: bubbleStyleEnum,
+                description: 'Estilo visual de la burbuja. Elige según el tono narrativo.',
+            },
+            fontFamily: {
+                type: Type.STRING,
+                enum: ['sans-bold', 'sans-italic', 'gothic', 'serif-display', 'handwritten'],
+                description: 'Fuente. Omitir para usar la fuente por defecto del estilo.',
+            },
+            accentColor: {
+                type: Type.STRING,
+                description: 'Color hex (#rrggbb). Solo aplica a emphasis-neon y splash-sfx. Ej: "#ff2d55" para rojo dramático.',
+            },
+            subPanelId: {
+                type: Type.STRING,
+                description: 'Opcional. Id de la viñeta (sub-panel) destino. Omitir para usar la viñeta seleccionada.',
+            },
+            position: {
+                type: Type.STRING,
+                enum: ['top', 'center', 'bottom', 'top-left', 'top-right', 'bottom-left', 'bottom-right'],
+                description: 'Posición relativa dentro de la viñeta. Default: top.',
+            },
+        },
+        required: ['text', 'bubbleType'],
+    },
+};
+
 export const chatWithAgent = async (history: ChatMessage[], project: Project): Promise<{ text: string, functionCall?: AgentFunctionCall }> => {
     const prevMsgs = history.slice(0, -1);
     const lastMsg = history[history.length - 1];
@@ -351,11 +408,25 @@ export const chatWithAgent = async (history: ChatMessage[], project: Project): P
 
     const currentParts: Part[] = [{ text: lastMsg.text }];
 
-    const systemInstruction = `You are Nano Banana Pro, the ultimate Manhwa Director. 
+    const systemInstruction = `You are Nano Banana Pro, the ultimate Manhwa Director.
     ${MANHWA_EXPERT_CONTEXT}
     Project: "${project.title}".
-    Help the user create an award-winning Webtoon.
-    Be creative, suggest layouts from 'Datos-Manwha', and be technically precise.`;
+
+    You have the following tool at your disposal:
+      - createDialogueBubble(text, bubbleType, fontFamily?, accentColor?, subPanelId?, position?)
+        → Places a dialogue bubble over a panel with the right style for the tone.
+
+    Pick bubbleType deliberately:
+      · Normal dialogue → "speech".
+      · Yelling, exclamation, impact → "shout".
+      · Internal monologue, telepathy → "thought".
+      · Secret, quiet aside → "whisper".
+      · Narrator line describing the scene → "narration-box".
+      · Two-part narration ("X... but Y") → "narration-double".
+      · Single short dramatic beat (2-4 words, a title, a keyword) → "emphasis-neon".
+      · Big cinematic splash text over a dark panel → "splash-sfx".
+
+    Help the user create an award-winning Webtoon. Respond in Spanish. Be technically precise.`;
 
     return runPrimary('chatWithAgent', async () => {
         // Proxy is stateless, so we flatten the history into the contents array
@@ -368,7 +439,10 @@ export const chatWithAgent = async (history: ChatMessage[], project: Project): P
         const result = await getAI().models.generateContent({
             model: MODEL_TEXT,
             contents,
-            config: { systemInstruction },
+            config: {
+                systemInstruction,
+                tools: [{ functionDeclarations: [createDialogueBubbleTool] }],
+            },
         });
 
         let fc: AgentFunctionCall | undefined = undefined;

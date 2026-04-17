@@ -321,8 +321,79 @@ export const Studio: React.FC<StudioProps> = ({ username, setProjectTitle, onExi
 
     const executeAgentAction = useCallback(async (action: AgentFunctionCall) => {
         if (!activeChapter) return;
-        showToast(`Ejecutando: ${action.name}`, 'info');
-    }, [activeChapter]);
+
+        switch (action.name) {
+            case 'createDialogueBubble': {
+                // Agent contract: see services/geminiService.ts → createDialogueBubbleTool
+                // and DIALOGUE_BUBBLE_SYSTEM.md.
+                const { text, bubbleType, fontFamily, accentColor, subPanelId, position } = action.args ?? {};
+                if (!text || !bubbleType) {
+                    showToast('El agente llamó createDialogueBubble sin text/bubbleType', 'error');
+                    return;
+                }
+
+                // Resolve the target sub-panel. Prefer explicit id, then the
+                // currently-selected one, then the first sub-panel of the
+                // first panel in the active chapter.
+                const allSubPanels = activeChapter.panels.flatMap(p => p.subPanels.map(sp => ({ sp, parentPanelId: p.id })));
+                const target =
+                    (subPanelId && allSubPanels.find(x => x.sp.id === subPanelId)) ||
+                    (selectedSubPanelIds[0] && allSubPanels.find(x => x.sp.id === selectedSubPanelIds[0])) ||
+                    allSubPanels[0];
+
+                if (!target) {
+                    showToast('No hay viñeta donde colocar la burbuja.', 'error');
+                    return;
+                }
+
+                // Bubble coordinates are relative to the parent panel, not the
+                // sub-panel. We use heuristic offsets (roughly center of the sub-panel)
+                // because we don't have DOM measurements here; the user can drag it
+                // after. Width/height scale to the text length.
+                const estWidth = Math.min(320, Math.max(140, (text as string).length * 9));
+                const estHeight = bubbleType === 'splash-sfx' ? 160
+                    : bubbleType === 'emphasis-neon' ? 90
+                    : 90;
+
+                const pos = position as string | undefined;
+                const baseX = pos?.includes('right') ? 420 : pos?.includes('left') ? 40 : 220;
+                const baseY = pos?.includes('bottom') ? 380 : pos?.includes('top') ? 40 : 180;
+
+                const newBubble = {
+                    id: generateId('bubble'),
+                    text: text as string,
+                    x: baseX,
+                    y: baseY,
+                    width: estWidth,
+                    height: estHeight,
+                    zIndex: 10,
+                    bubbleType: bubbleType as any,
+                    fontFamily: fontFamily as any,
+                    accentColor: accentColor as string | undefined,
+                };
+
+                updateProject(p => ({
+                    ...p,
+                    chapters: p.chapters.map(c =>
+                        c.id !== activeChapter.id
+                            ? c
+                            : {
+                                ...c,
+                                panels: c.panels.map(pa =>
+                                    pa.id !== target.parentPanelId
+                                        ? pa
+                                        : { ...pa, dialogueBubbles: [...(pa.dialogueBubbles ?? []), newBubble] }
+                                ),
+                            }
+                    ),
+                }));
+                showToast(`Burbuja "${bubbleType}" creada.`, 'success');
+                return;
+            }
+            default:
+                showToast(`Acción no soportada: ${action.name}`, 'error');
+        }
+    }, [activeChapter, selectedSubPanelIds, updateProject]);
 
     if (!project || !activeChapter) return <div>Cargando...</div>;
 

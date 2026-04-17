@@ -16,15 +16,30 @@ import { supabase } from './supabaseClient';
 // collection as a real array.
 const normalizeProject = (raw: any): Project => {
     if (!raw || typeof raw !== 'object') return raw as Project;
+    // Repair any panel whose `layout` has a different number of unique cells than
+    // its `subPanels` array. Previously handleDeleteSubPanel filtered the
+    // subPanels but left `layout` untouched, so old projects can come back with
+    // e.g. a 3-row layout but only 2 subpanels — the trailing row renders as a
+    // big black void and the idx→layout-value mapping used by getGridArea goes
+    // out of sync. Rebuilding to a simple vertical stack matches subpanel count
+    // and keeps the grid sound.
+    const repairPanel = (p: any) => {
+        const subPanels = Array.isArray(p?.subPanels) ? p.subPanels : [];
+        const dialogueBubbles = Array.isArray(p?.dialogueBubbles) ? p.dialogueBubbles : [];
+        const layout = Array.isArray(p?.layout) ? p.layout : [[1]];
+        const unique = Array.from(new Set(layout.flat().filter((v: any) => typeof v === 'number')));
+        const n = subPanels.length;
+        const needsRebuild = n > 0 && unique.length !== n;
+        const finalLayout = needsRebuild
+            ? Array.from({ length: n }, (_, i) => [i + 1])
+            : layout;
+        return { ...p, subPanels, dialogueBubbles, layout: finalLayout };
+    };
     return {
         ...raw,
         chapters: Array.isArray(raw.chapters) ? raw.chapters.map((c: any) => ({
             ...c,
-            panels: Array.isArray(c?.panels) ? c.panels.map((p: any) => ({
-                ...p,
-                subPanels: Array.isArray(p?.subPanels) ? p.subPanels : [],
-                dialogueBubbles: Array.isArray(p?.dialogueBubbles) ? p.dialogueBubbles : [],
-            })) : [],
+            panels: Array.isArray(c?.panels) ? c.panels.map(repairPanel) : [],
         })) : [],
         characters: Array.isArray(raw.characters) ? raw.characters : [],
         objects: Array.isArray(raw.objects) ? raw.objects : [],
