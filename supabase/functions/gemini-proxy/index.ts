@@ -8,6 +8,7 @@ import { checkRateLimit, tooManyRequests } from "../_shared/rateLimit.ts";
 // Keeping this short closes the door on someone calling unexpected / expensive models.
 const ALLOWED_MODELS = new Set<string>([
   "gemini-3.1-pro",
+  "gemini-3.1-pro-preview",
   "gemini-3-pro-image-preview",
   "gemini-3.1-flash-live-preview",
   "gemini-2.5-flash-preview-tts",

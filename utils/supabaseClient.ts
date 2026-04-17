@@ -1,17 +1,18 @@
 import { createClient } from '@supabase/supabase-js';
 
 // --- CONFIGURACIÓN MANHWA AI ---
-// Env vars (set in .env.local):
-//   VITE_SUPABASE_URL=https://<your-project>.supabase.co
+// Required env vars (set in .env.local):
+//   VITE_SUPABASE_URL=https://<project>.supabase.co
 //   VITE_SUPABASE_ANON_KEY=<anon-key>
-// Keeping the old hardcoded project as a fallback so existing users don't break
-// during the migration. Delete the literals once everyone has .env.local set.
-const FALLBACK_URL = 'https://cszizbtqgjhsoyybemhu.supabase.co';
-const FALLBACK_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImNzeml6YnRxZ2poc295eWJlbWh1Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzIwMzA2NjMsImV4cCI6MjA4NzYwNjY2M30.YsaXbKvGzEyfssizyIijS0tE-gvpStMxq7XHBlf4Bng';
-
 const env = (import.meta as any).env ?? {};
-export const SUPABASE_URL: string = env.VITE_SUPABASE_URL || FALLBACK_URL;
-export const SUPABASE_KEY: string = env.VITE_SUPABASE_ANON_KEY || FALLBACK_KEY;
+export const SUPABASE_URL: string = env.VITE_SUPABASE_URL;
+export const SUPABASE_KEY: string = env.VITE_SUPABASE_ANON_KEY;
+
+if (!SUPABASE_URL || !SUPABASE_KEY) {
+    throw new Error(
+        "Missing Supabase configuration. Set VITE_SUPABASE_URL and VITE_SUPABASE_ANON_KEY in .env.local."
+    );
+}
 
 export const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
     auth: {
